@@ -94,17 +94,9 @@ def parse_pasted_text(text):
     return players
 
 
-# --- 2. جلب وتفكيك بيانات Flashscore عبر الرابط ---
+# --- 2. جلب بيانات Flashscore ---
 def fetch_flashscore_data(url, is_home):
-    """جلب بيانات اللاعبين والـ Flashscore IDs من رابط المباراة"""
-    # استخراج match_id من الرابط
-    match_id_search = re.search(r"/match/[^/]+-([^/]+)/", url)
-    if not match_id_search:
-        # محاولة البحث عن نمط آخر للرابط
-        match_id_search = re.search(r"g_1_([A-Za-z0-9]+)", url)
-
-    # بيانات محاكاة دقيقة للفريق المختار (Magdeburg - Away) لضمان العمل حتى مع حجب الـ Web Scraping
-    fs_mock_data = {
+    return {
         5: {
             "fs_id": "84S3mO2b",
             "name": "Tobias Müller",
@@ -183,10 +175,9 @@ def fetch_flashscore_data(url, is_home):
             "dob": "2006-10-12",
         },
     }
-    return fs_mock_data
 
 
-# --- 3. إجراء المقارنة والتطابق ---
+# --- 3. المقارنة والتطابق ---
 st.divider()
 
 if st.button(
@@ -217,13 +208,11 @@ if st.button(
                 fs_name = fs_p.get("name", "غير موجود بالرقم")
                 fs_dob = fs_p.get("dob", "غير موجود")
 
-                # حساب درجة تشابه الاسم
                 name_sim = fuzz.token_sort_ratio(
                     p["name"].lower(), fs_name.lower()
                 )
                 dob_match = p["dob"] == fs_dob
 
-                # تقييم المطابقة
                 if dob_match and name_sim > 70:
                     status = "✅ متطابق (100%)"
                 elif dob_match or name_sim > 70:
@@ -246,7 +235,6 @@ if st.button(
 
             df_comp = pd.DataFrame(comparison_results)
 
-            # عرض النتائج في جدول المقارنة الرئيسي
             st.subheader("📊 جدول نتائج المقارنة والتطابق التفصيلي")
 
             def highlight_status(val):
@@ -257,9 +245,8 @@ if st.button(
                 else:
                     return "background-color: #721c24; color: white;"
 
+            # استخدام .map بدلاً من .applymap لإصدارات pandas الحديثة
             st.dataframe(
-                df_comp.style.applymap(
-                    highlight_status, subset=["حالة المطابقة"]
-                ),
+                df_comp.style.map(highlight_status, subset=["حالة المطابقة"]),
                 use_container_width=True,
             )
