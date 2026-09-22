@@ -2,5 +2,4 @@ streamlit
 pandas
 fuzzywuzzy
 python-Levenshtein
-cloudscraper
-requests
+curl_cffi
