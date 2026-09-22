@@ -40,13 +40,29 @@ COUNTRY_ALIASES = {
     "peru": {"peru", "per", "pe"},
     "croatia": {"croatia", "cro", "hrvatska", "hr"},
     "austria": {"austria", "aut", "osterreich", "at"},
-    "switzerland": {"switzerland", "sui", "sui.", "schweiz", "ch"},
+    "switzerland": {"switzerland", "sui", "schweiz", "ch"},
     "netherlands": {"netherlands", "ned", "holland", "nl"},
+    "england": {"england", "eng"},
+    "scotland": {"scotland", "sco"},
+    "wales": {"wales", "wal", "cymru"},
+    "northern ireland": {"northern ireland", "nir", "n ireland"},
+    "ireland": {"ireland", "irl", "republic of ireland", "eire", "roi"},
+    "jamaica": {"jamaica", "jam"},
+    "st kitts and nevis": {
+        "st kitts and nevis", "saint kitts and nevis", "st. kitts and nevis", "skn",
+    },
     "usa": {"usa", "united states", "united states of america", "us"},
     "south korea": {"south korea", "korea republic", "republic of korea", "kor"},
     "ivory coast": {"ivory coast", "cote divoire", "civ"},
     "dr congo": {"dr congo", "congo dr", "democratic republic of congo", "cod"},
 }
+
+# لو السورس مسجل "United Kingdom" وترانسفرماركت مسجل "England"،
+# الاتنين مقبولين -- المجموعات دي بتعتبر بعضها متطابقة.
+COUNTRY_GROUPS = [
+    {"united kingdom", "great britain", "gb", "uk",
+     "england", "scotland", "wales", "northern ireland"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -149,12 +165,40 @@ def normalize_dob(value) -> str:
     return ""
 
 
-def country_key(value: str) -> str:
-    norm = normalize_name(value).replace(".", "").strip()
-    for canon, aliases in COUNTRY_ALIASES.items():
-        if norm in aliases:
-            return canon
-    return norm
+def country_keys(value: str) -> set:
+    """
+    يرجّع مجموعة الجنسيات المطبَّعة. اللاعب ممكن يكون له أكتر من
+    جنسية، مفصولين بـ | أو / أو فاصلة.
+    """
+    if not value:
+        return set()
+    out = set()
+    for part in re.split(r"[|/,;]", str(value)):
+        norm = normalize_name(part).replace(".", "").strip()
+        if not norm:
+            continue
+        hit = next(
+            (canon for canon, al in COUNTRY_ALIASES.items() if norm in al), norm
+        )
+        out.add(hit)
+    return out
+
+
+def countries_agree(src_val: str, fs_val: str) -> str:
+    """
+    ✅ لو فيه أي جنسية مشتركة، ❌ لو مفيش، ➖ لو حد منهم فاضي.
+    اللاعب بجنسيتين على ترانسفرماركت لازم يتطابق لو السورس مسجل
+    واحدة منهم بس.
+    """
+    a, b = country_keys(src_val), country_keys(fs_val)
+    if not a or not b:
+        return "➖"
+    if a & b:
+        return "✅"
+    for group in COUNTRY_GROUPS:
+        if (a & group) and (b & group):
+            return "✅"
+    return "❌"
 
 
 # ---------------------------------------------------------------------------
@@ -344,8 +388,7 @@ def build_report(pairs, only_source, only_fs):
         else:
             dob_state = "➖"
 
-        sk, fk = country_key(src["nationality"]), country_key(fs["nationality"])
-        nat_state = "➖" if not sk or not fk else ("✅" if sk == fk else "❌")
+        nat_state = countries_agree(src["nationality"], fs["nationality"])
 
         if method.startswith("رقم القميص"):
             status = "⚠️ مطابقة ضعيفة — راجعه يدوي"
@@ -425,25 +468,27 @@ st.caption(
     "وبعدين رقم القميص كآخر حل."
 )
 
-with st.expander("📋 إزاي تجيب تشكيلة Flashscore", expanded=False):
+with st.expander("📋 إزاي تجيب التشكيلة", expanded=False):
     st.markdown(
         """
-**الطريقة السهلة (بالماوس):**
+**من ترانسفرماركت (الأفضل — بيجيب تاريخ الميلاد كمان):**
 
-1. افتح صفحة الماتش على تاب **Lineups**.
-2. علّم على التشكيلة بالماوس من أول لاعب لآخر البدلاء، واضغط `Ctrl+C`.
-3. الصق هنا في الخانة اليمين.
+1. افتح صفحة الماتش واضغط تاب **LINE-UPS**.
+2. اسكرول لتحت لحد ما تشوف البدلاء والمدرب.
+3. `F12` ← تاب **Console**. لو كروم طلب، اكتب `allow pasting` واضغط Enter.
+4. الصق محتوى `transfermarkt-extract.js` واضغط Enter — الصندوق
+   هيشتغل لوحده.
+5. لما يخلص دوس **انسخ**، والصق هنا في الخانة اليمين.
 
-عادي لو النص فيه الفريقين مع بعض — علّم على المربع اللي تحت
-"النص فيه الفريقين" وهي هتتعامل مع ده.
-
-بالطريقة دي هتجيب **الأرقام والأسماء بس**، لأن تاريخ الميلاد مش
-معروض في صفحة التشكيلة أصلاً. عمود تطابق الميلاد هيبان ➖.
+بيجيب: رقم القميص، الاسم الكامل، تاريخ الميلاد، الجنسيات (كلها لو
+اللاعب عنده أكتر من واحدة)، والفريق.
 
 ---
 
-**الطريقة الكاملة (بتاريخ الميلاد):** لازم سكريبت يفتح بروفايل كل
-لاعب. لو محتاجها، قول لـ Claude وهو يجهزها لك.
+**بسرعة بالماوس (بدون تاريخ ميلاد):** علّم على التشكيلة في أي موقع
+بالماوس، `Ctrl+C`، والصق هنا. هتجيب الأرقام والأسماء بس.
+
+عادي لو النص فيه الفريقين مع بعض — علّم على المربع اللي تحت.
         """
     )
 
