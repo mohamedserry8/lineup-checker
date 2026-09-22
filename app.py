@@ -1,107 +1,135 @@
-import json
-from google import genai
+import re
+from fuzzywuzzy import fuzz
 import pandas as pd
-from PIL import Image
 import streamlit as st
 
 st.set_page_config(
-    page_title="أداة مطابقة التشكيلات", page_icon="⚽", layout="wide"
+    page_title="أداة مطابقة التشكيلات النصية", page_icon="⚽", layout="wide"
 )
 
-st.title("⚽ أداة قراءة ومطابقة التشكيلات الذكية")
+st.title("⚽ أداة مطابقة التشكيلات (إدخال نصي + تحديد الفريق)")
 st.write(
-    "ارفع سكرينشوت قائمة الفريق وسيقوم الذكاء الاصطناعي باستخراج الجدول بالكامل بدقة 100%."
+    "انسخ نص الجدول من نظامك الداخلي، وحدد ما إذا كان الفريق Home أم Away لمطابقة البيانات بدون أخطاء."
 )
 
 st.divider()
-
-# الشريط الجانبي لإدخال المفتاح
-st.sidebar.header("⚙️ إعدادات الذكاء الاصطناعي")
-api_key = st.sidebar.text_input(
-    "أدخل Gemini API Key (مجاني):",
-    type="password",
-    help="احصل عليه مجاناً بضغطة زر من aistudio.google.com",
-)
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("1. سكرينشوت النظام الداخلي")
-    uploaded_file = st.file_uploader(
-        "اختر صورة القائمة (PNG, JPG)", type=["png", "jpg", "jpeg"]
+    st.subheader("1. بيانات الفريق الداخلي (انسخ الجدول هنا)")
+    raw_text = st.text_area(
+        "انسخ محتوى الجدول بالكامل (Started & Bench) والصقه هنا:",
+        height=260,
+        placeholder="مثال:\n1 1040197 Florian Hellstern 2007-10-18 Germany\n27 28709 Gian-Luca Itter 1999-01-05 Germany...",
     )
-    if uploaded_file:
-        image = Image.open(uploaded_file)
-        st.image(
-            image, caption="الصورة المرفوعة", use_container_width=True
-        )
+
+    team_side = st.radio(
+        "هذا الفريق يمثل في المباراة:",
+        ["Home (صاحب الأرض)", "Away (الضيف)"],
+        horizontal=True,
+    )
 
 with col2:
-    st.subheader("2. رابط Flashscore")
+    st.subheader("2. رابط المباراة من Flashscore")
     flashscore_url = st.text_input(
-        "أدخل رابط المباراة (اختياري للمطابقة)",
-        placeholder="https://www.flashscore.com/...",
+        "أدخل رابط المباراة من Flashscore:",
+        placeholder="https://www.flashscore.com/match/football/...",
+    )
+    st.info(
+        "💡 تحديد (Home/Away) يضمن مطابقة القائمة بالفريق الصحيح داخل Flashscore وليس الفريق المنافس."
     )
 
-st.divider()
 
-if st.button("🚀 ابدأ استخراج البيانات بالمطابقة", type="primary", use_container_width=True):
-    if not uploaded_file:
-        st.warning("⚠️ يرجى رفع صورة القائمة أولاً!")
-    elif not api_key:
-        st.warning(
-            "⚠️ يرجى إدخال Gemini API Key في القائمة الجانبية (Sidebar) لقراءة الصورة!"
+def parse_pasted_text(text):
+    """تفكيك النص المنسوخ من جدول النظام واستخراج البيانات بدقة"""
+    players = []
+    lines = text.strip().split("\n")
+    current_section = "Started"
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # التمييز بين الأساسيين والبدلاء عند إيجاد العناوين
+        if "Bench" in line:
+            current_section = "Bench"
+            continue
+        elif "Started" in line:
+            current_section = "Started"
+            continue
+
+        # تفكيك السطر المنسوخ (رقم القميص - ID - الاسم الكامل - تاريخ الميلاد - الجنسية)
+        match = re.search(
+            r"^(\d{1,2})\s+(\d+)\s+(.+?)\s+(\d{4}-\d{2}-\d{2})\s*(.*)$", line
         )
-    else:
-        try:
-            with st.spinner("جاري مسح الجدول واستخراج كافة بيانات اللاعبين..."):
-                client = genai.Client(api_key=api_key)
-                img = Image.open(uploaded_file)
-
-                prompt = """
-                Extract all player rows from this lineup table screenshot into a valid JSON array of objects.
-                Each player object MUST include:
-                - "number": integer (jersey number)
-                - "id": string (ID column)
-                - "name": string (Full Name column)
-                - "dob": string (DOB column, YYYY-MM-DD)
-                - "nationality": string (Nationality column)
-                - "type": string ("Started" or "Bench")
-
-                Return ONLY a valid raw JSON array without markdown formatting or backticks.
-                """
-
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash", contents=[img, prompt]
-                )
-
-                # تنظيف النص واستخراج الـ JSON
-                raw_json = (
-                    response.text.replace("```json", "")
-                    .replace("```", "")
-                    .strip()
-                )
-                players_data = json.loads(raw_json)
-
-                df = pd.DataFrame(players_data)
-
-                # إعادة ترتيب وتسمية الأعمدة بالترتيب العربي
-                df = df.rename(
-                    columns={
-                        "number": "رقم القميص",
-                        "id": "ID اللاعب",
-                        "name": "اسم اللاعب الكامل",
-                        "dob": "تاريخ الميلاد",
-                        "nationality": "الجنسية",
-                        "type": "المركز (أساسي/بديل)",
+        if match:
+            players.append(
+                {
+                    "number": int(match.group(1)),
+                    "id": match.group(2),
+                    "name": match.group(3).strip(),
+                    "dob": match.group(4).strip(),
+                    "nationality": match.group(5).strip(),
+                    "type": (
+                        "أساسي" if current_section == "Started" else "بديل"
+                    ),
+                }
+            )
+        else:
+            # تجربة الفصل بـ Tab (\t) في حال نسخ الجدول مباشرة من المتصفح
+            parts = [p.strip() for p in line.split("\t") if p.strip()]
+            if len(parts) >= 4 and parts[0].isdigit():
+                players.append(
+                    {
+                        "number": int(parts[0]),
+                        "id": parts[1],
+                        "name": parts[2],
+                        "dob": parts[3],
+                        "nationality": parts[4] if len(parts) > 4 else "",
+                        "type": (
+                            "أساسي" if current_section == "Started" else "بديل"
+                        ),
                     }
                 )
 
-                st.success(
-                    f"✅ تم استخراج {len(df)} لاعباً بنجاح من الصورة!"
-                )
-                st.subheader("📋 تقرير استخراج القائمة التفصيلي")
-                st.dataframe(df, use_container_width=True)
+    return players
 
-        except Exception as e:
-            st.error(f"❌ حدث خطأ أثناء المعالجة: {e}")
+
+st.divider()
+
+if st.button("🚀 ابدأ تحليل النص والمطابقة", type="primary", use_container_width=True):
+    if not raw_text.strip():
+        st.warning("⚠️ يرجى لصق نص الجدول في المربع أولاً!")
+    else:
+        # استخراج بيانات النص
+        source_players = parse_pasted_text(raw_text)
+
+        if not source_players:
+            st.error(
+                "❌ لم يتم التعرف على بنية النص! احرص على تحديد كامل الجدول بما فيه الرقم والاسم وتاريخ الميلاد."
+            )
+        else:
+            st.success(
+                f"✅ تم تحليل النص بنجاح واستخراج {len(source_players)} لاعباً من فئة ({team_side.split()[0]})!"
+            )
+
+            # تحويل البيانات لجدول منظم
+            df = pd.DataFrame(source_players)
+
+            df_display = df.rename(
+                columns={
+                    "number": "رقم القميص",
+                    "id": "ID اللاعب",
+                    "name": "اسم اللاعب الكامل",
+                    "dob": "تاريخ الميلاد",
+                    "nationality": "الجنسية",
+                    "type": "المركز",
+                }
+            )
+
+            st.subheader(
+                f"📋 قائمة البيانات المستخرجة من نظامك الداخلي"
+            )
+            st.dataframe(df_display, use_container_width=True)
