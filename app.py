@@ -2,13 +2,14 @@ import re
 import cloudscraper
 from fuzzywuzzy import fuzz
 import pandas as pd
+import requests
 import streamlit as st
 
 st.set_page_config(
     page_title="أداة مطابقة التشكيلات التلقائية", page_icon="⚽", layout="wide"
 )
 
-st.title("⚽ أداة المطابقة التلقائية الحية (Flashscore Automated Scraper)")
+st.title("⚽ أداة المطابقة التلقائية الحية (Flashscore Live Scraper)")
 st.write(
     "ضع رابط المباراة ونظامك الداخلي، وسيقوم النظام أوتوماتيكياً بجلب البروفايلات والـ IDs والمقارنة بنسبة 100%."
 )
@@ -94,63 +95,68 @@ def parse_pasted_text(text):
     return players
 
 
-# --- 2. استخراج Match ID التلقائي الدقيق ---
+# --- 2. استخراج Match ID الدقيق ---
 def extract_match_id(url):
-    # البحث عن كود المباراة المكون من 8 خانات بعد اسم الفريق في رابط Flashscore
-    match = re.search(r"football/[^/]*?-([a-zA-Z0-9]{8})", url)
+    # استخراج الكود المكون من 8 خانات المسبوق بشرطة قبل كلمة summary أو lineups
+    match = re.search(r"-([a-zA-Z0-9]{8})(?:/|\?|$)", url)
     if match:
         return match.group(1)
 
-    match = re.search(r"-([a-zA-Z0-9]{8})(?:/|\?|$)", url)
+    match = re.search(r"football/[^/]*?-([a-zA-Z0-9]{8})", url)
     if match:
         return match.group(1)
 
     return None
 
 
-# --- 3. جلب بيانات Flashscore الحية بفك الحظر تلقائياً (Cloudscraper) ---
+# --- 3. جلب بيانات Flashscore بنطاقات رسمية وموثوقة ---
 def fetch_flashscore_data_automated(url, is_home):
     match_id = extract_match_id(url)
     if not match_id:
         st.error("❌ لم نتمكن من تحديد كود المباراة من الرابط المرفق!")
         return {}
 
-    # إنشاء جلب محاكي لمصفح متكامل لتجاوز حماية Cloudflare
     scraper = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "windows", "desktop": True}
     )
 
-    feed_url = f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1"
+    # تجربة السيرفرات الرسمية المباشرة لـ Flashscore CDN فقط
+    endpoints = [
+        f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1",
+        f"https://2.ds.flashscore.com/x/feed/d_su_{match_id}_en_1",
+        f"https://1.ds.flashscore.com/x/feed/d_su_{match_id}_en_1",
+    ]
+
     headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
         "Referer": "https://www.flashscore.com/",
         "X-Fsign": "SW1hZ2luZSB3aXRob3V0IG1lbnRpb25pbmc=",
+        "x-geoip": "1",
     }
 
-    try:
-        res = scraper.get(feed_url, headers=headers, timeout=15)
+    text_response = None
+    for feed_url in endpoints:
+        try:
+            res = scraper.get(feed_url, headers=headers, timeout=10)
+            if res.status_code == 200 and res.text:
+                text_response = res.text
+                break
+        except Exception:
+            continue
 
-        # تجربة السيرفر الاحتياطي إذا لزم الأمر
-        if res.status_code != 200 or not res.text:
-            feed_url = (
-                f"https://local-sa.flashscore.ninja/35/x/feed/d_su_{match_id}_en_1"
-            )
-            res = scraper.get(feed_url, headers=headers, timeout=15)
-
-        if res.status_code != 200:
-            st.error(
-                f"❌ تعذر استخراج البيانات من Flashscore (كود الاستجابة: {res.status_code})"
-            )
-            return {}
-
-        text = res.text
-    except Exception as e:
-        st.error(f"❌ خطأ أثناء الاتصال السلس بالرابط: {e}")
+    if not text_response:
+        st.error(
+            "❌ تعذر الاتصال بـ Flashscore. قد تكون الخدمة محجوبة مؤقتاً على خوادم السحاب."
+        )
         return {}
 
     target_side = "1" if is_home else "2"
     team_data = {}
 
-    items = text.split("~")
+    items = text_response.split("~")
     for item in items:
         parts = item.split("÷")
         kv = {}
@@ -284,7 +290,7 @@ if st.button(
                 df_comp = pd.DataFrame(comparison_results)
 
                 st.success(
-                    f"✅ تم سحب تشكيلة Flashscore الحية بنجاح بنسبة 100%!"
+                    "✅ تم سحب تشكيلة Flashscore الحية بنجاح بنسبة 100%!"
                 )
                 st.subheader(
                     f"📊 نتائج المقارنة والتحقق الآلي ({'صاحب الأرض - Home' if is_home_team else 'الضيف - Away'})"
