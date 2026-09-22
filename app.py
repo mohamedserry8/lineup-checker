@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Lineup Checker -- مقارنة تشكيلة السيستم الداخلي بتشكيلة Transfermarkt
+Lineup Checker -- مقارنة تشكيلة السيستم الداخلي بتشكيلة Flashscore
 =================================================================
 
 النسخة دي مفيهاش أي اتصال بالإنترنت. بتقارن نصين ملزوقين:
   - يسار: جدول السيستم الداخلي
-  - يمين: مخرج سكريبت Transfermarkt-extract.js (أو نسخ يدوي من الصفحة)
+  - يمين: مخرج سكريبت flashscore-extract.js (أو نسخ يدوي من الصفحة)
 
 ليه؟ فييدات فلاش سكور بقت GraphQL بـ persisted queries، والهاش بتاعها
 بيتغير مع كل ديبلوي، فأي سكرابينج بيفصل كل أسبوعين. اللصق مش بيفصل أبداً.
@@ -692,7 +692,7 @@ BLOCK_ON_LOG_FAILURE = False
 SHEET_HEADER = [
     "الوقت", "الإيميل",
     "Match ID (السيستم)", "اسم الماتش (السيستم)",
-    "Match ID (ترانسفرماركت)", "اسم الماتش (ترانسفرماركت)",
+    "Match ID (المصدر)", "اسم الماتش (المصدر)",
     "لينك الماتش", "الفريق",
     "لاعبين السيستم", "لاعبين المصدر", "تطابق كامل", "محتاج مراجعة",
     "عندنا ومش عندهم", "عندهم ومش عندنا", "تفاصيل الاختلاف", "المصدر",
@@ -1132,14 +1132,20 @@ with sc:
     ).strip()
 
 with tc:
-    st.markdown("**من ترانسفرماركت**")
+    _src_label = {
+        "transfermarkt": "ترانسفرماركت",
+        "sofascore": "سوفا سكور",
+        "flashscore": "فلاش سكور",
+    }.get(_auto_source, _auto_source or "المصدر")
+
+    st.markdown(f"**من {_src_label}**")
     match_id = st.text_input(
-        "Match ID (ترانسفرماركت)",
+        f"Match ID ({_src_label})",
         value=_auto_id,
         help="بيتعبّى لوحده من النص الملزوق.",
     ).strip()
     match_name = st.text_input(
-        "اسم الماتش (ترانسفرماركت)",
+        f"اسم الماتش ({_src_label})",
         value=_auto_name,
         placeholder="Harrogate Town vs Solihull Moors",
     ).strip()
@@ -1169,8 +1175,8 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         st.stop()
     if not match_id:
         st.error(
-            "❌ لازم Match ID من ترانسفرماركت. لو النص مفيهوش، "
-            "خده من لينك الماتش — الرقم اللي في آخره."
+            f"❌ لازم Match ID من {_src_label}. لو النص مفيهوش، "
+            "خده من لينك الماتش."
         )
         st.stop()
 
