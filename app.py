@@ -265,7 +265,7 @@ def parse_internal(text: str):
 
 
 # ---------------------------------------------------------------------------
-# تفكيك نص Transfermarkt
+# تفكيك نص Flashscore
 # ---------------------------------------------------------------------------
 
 # علامات زي (G) للحارس و (C) للكابتن -- بتتشال من الاسم
@@ -278,7 +278,7 @@ SECTION_WORDS = (
 )
 
 
-def parse_Transfermarkt(text: str, want_side: str):
+def parse_flashscore(text: str, want_side: str):
     """
     بيقبل تلات صيغ:
 
@@ -595,7 +595,7 @@ def tm_profile(url: str):
 
 def tm_load(match_url: str, want_dob: bool, progress=None):
     """
-    يرجّع (players, messages). كل لاعب بنفس شكل مخرج parse_Transfermarkt
+    يرجّع (players, messages). كل لاعب بنفس شكل مخرج parse_flashscore
     عشان باقي الأداة تشتغل من غير تعديل.
     """
     msgs = []
@@ -690,7 +690,10 @@ def parse_meta(text: str) -> dict:
 BLOCK_ON_LOG_FAILURE = False
 
 SHEET_HEADER = [
-    "الوقت", "الإيميل", "Match ID", "لينك الماتش", "الفريق",
+    "الوقت", "الإيميل",
+    "Match ID (السيستم)", "اسم الماتش (السيستم)",
+    "Match ID (ترانسفرماركت)", "اسم الماتش (ترانسفرماركت)",
+    "لينك الماتش", "الفريق",
     "لاعبين السيستم", "لاعبين المصدر", "تطابق كامل", "محتاج مراجعة",
     "عندنا ومش عندهم", "عندهم ومش عندنا", "تفاصيل الاختلاف", "المصدر",
 ]
@@ -747,10 +750,18 @@ def _sheet():
             ws = book.add_worksheet(title=tab_name, rows=2000,
                                     cols=len(SHEET_HEADER))
 
-        # نحط العناوين لو الشيت فاضية
+        # نحط العناوين لو الشيت فاضية، وننبّه لو قديمة
         try:
-            if not ws.acell("A1").value:
+            first = ws.row_values(1)
+            if not first:
                 ws.update("A1", [SHEET_HEADER])
+            elif first != SHEET_HEADER:
+                return ws, (
+                    f"⚠️ عناوين الشيت قديمة ({len(first)} عمود بدل "
+                    f"{len(SHEET_HEADER)}). التسجيل شغال بس الأعمدة "
+                    "ممكن تبقى مش في مكانها. صحّح السطر الأول في الشيت "
+                    "أو اعمل تاب جديد فاضي."
+                )
         except Exception:
             pass
 
@@ -762,11 +773,11 @@ def _sheet():
 def log_review(row: list):
     """يرجّع (نجح؟, رسالة الخطأ)."""
     ws, err = _sheet()
-    if err:
+    if ws is None:
         return False, err
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
-        return True, None
+        return True, err   # err ممكن يكون تحذير عناوين بس
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
 
@@ -784,21 +795,21 @@ def mismatch_details(df: pd.DataFrame) -> str:
 
         name = r["اسم السورس"]
         if "— غير موجود —" in str(name):
-            out.append(f"{r['اسم Transfermarkt']}: عندهم ومش عندنا")
+            out.append(f"{r['اسم Flashscore']}: عندهم ومش عندنا")
             continue
-        if "— غير موجود —" in str(r["اسم Transfermarkt"]):
+        if "— غير موجود —" in str(r["اسم Flashscore"]):
             out.append(f"{name}: عندنا ومش عندهم")
             continue
 
         bits = []
         if r["تطابق الرقم"] == "❌":
-            bits.append(f"رقم {r['رقم السورس']}≠{r['رقم Transfermarkt']}")
+            bits.append(f"رقم {r['رقم السورس']}≠{r['رقم Flashscore']}")
         if r["تطابق الميلاد"] == "❌":
-            bits.append(f"ميلاد {r['ميلاد السورس']}≠{r['ميلاد Transfermarkt']}")
+            bits.append(f"ميلاد {r['ميلاد السورس']}≠{r['ميلاد Flashscore']}")
         if r["تطابق الجنسية"] == "❌":
-            bits.append(f"جنسية {r['جنسية السورس']}≠{r['جنسية Transfermarkt']}")
+            bits.append(f"جنسية {r['جنسية السورس']}≠{r['جنسية Flashscore']}")
         if int(r["تشابه الاسم %"]) < NAME_MATCH_THRESHOLD:
-            bits.append(f"اسم {name}≠{r['اسم Transfermarkt']}")
+            bits.append(f"اسم {name}≠{r['اسم Flashscore']}")
         if "رقم القميص" in str(r["طريقة المطابقة"]):
             bits.append("اتطابق بالرقم لوحده")
 
@@ -811,10 +822,10 @@ def mismatch_details(df: pd.DataFrame) -> str:
 # المطابقة
 # ---------------------------------------------------------------------------
 
-def match_squads(source, Transfermarkt):
+def match_squads(source, flashscore):
     """يرجّع (أزواج متطابقة، اللي عندك بس، اللي عندهم بس)."""
     pairs = []
-    src_left, fs_left = list(source), list(Transfermarkt)
+    src_left, fs_left = list(source), list(flashscore)
 
     # 1) تاريخ الميلاد
     for src in list(src_left):
@@ -881,16 +892,16 @@ def build_report(pairs, only_source, only_fs):
 
         rows.append({
             "رقم السورس": src["number"],
-            "رقم Transfermarkt": fs["shirt"] if fs["shirt"] is not None else "—",
+            "رقم Flashscore": fs["shirt"] if fs["shirt"] is not None else "—",
             "تطابق الرقم": "✅" if num_ok else "❌",
             "اسم السورس": src["name"],
-            "اسم Transfermarkt": fs["name"],
+            "اسم Flashscore": fs["name"],
             "تشابه الاسم %": score,
             "ميلاد السورس": src["dob"] or "—",
-            "ميلاد Transfermarkt": fs["dob"] or "—",
+            "ميلاد Flashscore": fs["dob"] or "—",
             "تطابق الميلاد": dob_state,
             "جنسية السورس": src["nationality"] or "—",
-            "جنسية Transfermarkt": fs["nationality"] or "—",
+            "جنسية Flashscore": fs["nationality"] or "—",
             "تطابق الجنسية": nat_state,
             "ID داخلي": src["internal_id"],
             "ID فلاش سكور": fs["fs_id"],
@@ -899,9 +910,9 @@ def build_report(pairs, only_source, only_fs):
         })
 
     blank = {k: "—" for k in (
-        "رقم السورس", "رقم Transfermarkt", "اسم السورس", "اسم Transfermarkt",
-        "ميلاد السورس", "ميلاد Transfermarkt", "جنسية السورس",
-        "جنسية Transfermarkt", "ID داخلي", "ID فلاش سكور",
+        "رقم السورس", "رقم Flashscore", "اسم السورس", "اسم Flashscore",
+        "ميلاد السورس", "ميلاد Flashscore", "جنسية السورس",
+        "جنسية Flashscore", "ID داخلي", "ID فلاش سكور",
     )}
 
     for src in only_source:
@@ -909,7 +920,7 @@ def build_report(pairs, only_source, only_fs):
             "رقم السورس": src["number"],
             "تطابق الرقم": "❌",
             "اسم السورس": src["name"],
-            "اسم Transfermarkt": "— غير موجود —",
+            "اسم Flashscore": "— غير موجود —",
             "تشابه الاسم %": 0,
             "ميلاد السورس": src["dob"] or "—",
             "تطابق الميلاد": "❌",
@@ -917,23 +928,23 @@ def build_report(pairs, only_source, only_fs):
             "تطابق الجنسية": "❌",
             "ID داخلي": src["internal_id"],
             "طريقة المطابقة": "—",
-            "الحالة": "❌ عندك ومش عند Transfermarkt",
+            "الحالة": "❌ عندك ومش عند Flashscore",
         })
 
     for fs in only_fs:
         rows.append({**blank,
-            "رقم Transfermarkt": fs["shirt"] if fs["shirt"] is not None else "—",
+            "رقم Flashscore": fs["shirt"] if fs["shirt"] is not None else "—",
             "تطابق الرقم": "❌",
             "اسم السورس": "— غير موجود —",
-            "اسم Transfermarkt": fs["name"],
+            "اسم Flashscore": fs["name"],
             "تشابه الاسم %": 0,
-            "ميلاد Transfermarkt": fs["dob"] or "—",
+            "ميلاد Flashscore": fs["dob"] or "—",
             "تطابق الميلاد": "❌",
-            "جنسية Transfermarkt": fs["nationality"] or "—",
+            "جنسية Flashscore": fs["nationality"] or "—",
             "تطابق الجنسية": "❌",
             "ID فلاش سكور": fs["fs_id"],
             "طريقة المطابقة": "—",
-            "الحالة": "❌ عند Transfermarkt ومش عندك",
+            "الحالة": "❌ عند Flashscore ومش عندك",
         })
 
     return pd.DataFrame(rows)
@@ -944,7 +955,7 @@ def build_report(pairs, only_source, only_fs):
 # ---------------------------------------------------------------------------
 
 st.set_page_config(page_title="مطابقة التشكيلات", page_icon="⚽", layout="wide")
-st.title("⚽ مطابقة التشكيلات: السيستم الداخلي ضد Transfermarkt")
+st.title("⚽ مطابقة التشكيلات: السيستم الداخلي ضد Flashscore")
 st.caption(
     "المطابقة بتمشي على تاريخ الميلاد أولاً، بعدين الاسم المطبَّع، "
     "وبعدين رقم القميص كآخر حل."
@@ -1001,12 +1012,14 @@ email = st.text_input(
 if email:
     st.session_state["reviewer_email"] = email.strip()
 
-if _log_err:
+if _ws is None and _log_err:
     st.warning(
         f"⚠️ تسجيل جوجل شيت مش مفعّل: {_log_err}\n\n"
         "المقارنة هتشتغل عادي بس مش هتتسجل. "
         "التفاصيل في SETUP-GOOGLE-SHEET.md"
     )
+elif _log_err:
+    st.warning(_log_err)
 
 col1, col2 = st.columns(2)
 
@@ -1076,6 +1089,70 @@ with col2:
 
 st.divider()
 
+st.divider()
+
+# --- بيانات الماتش للتسجيل ---
+# لازم تكون برة بلوك الزرار: في Streamlit أي خانة بتتعمل جوه البلوك
+# قيمتها بترجع فاضية في نفس الجولة، فالتسجيل كان بياخد قيمة فاضية.
+_meta = parse_meta(fs_text) if (not use_url and fs_text) else {}
+
+_auto_id = _meta.get("match_id", "")
+_auto_name = _meta.get("match_name", "")
+_auto_link = _meta.get("match_url", "")
+_auto_source = _meta.get("source", "transfermarkt")
+
+if use_url and tm_url.strip():
+    _mm = re.search(r"spielbericht/(\d+)", tm_match_url(tm_url))
+    _auto_id = _mm.group(1) if _mm else ""
+    _auto_link = tm_match_url(tm_url)
+    _slug = urlparse(_auto_link).path.lstrip("/").split("/")[0]
+    if "_" in _slug:
+        _h, _, _a = _slug.partition("_")
+        pretty = lambda s: " ".join(w.capitalize() for w in s.split("-") if w)
+        _auto_name = f"{pretty(_h)} vs {pretty(_a)}"
+
+st.subheader("🆔 بيانات الماتش")
+st.caption(
+    "الشمال من سيستمك (بتكتبه)، واليمين من ترانسفرماركت "
+    "(بيتعبّى لوحده). الاتنين بيتسجلوا في الشيت."
+)
+
+sc, tc = st.columns(2)
+
+with sc:
+    st.markdown("**من السيستم عندك**")
+    src_match_id = st.text_input(
+        "Match ID (السيستم)",
+        placeholder="مثال: 1884213",
+        help="الـ ID اللي بتبحث بيه في الداتابيز بتاعتك.",
+    ).strip()
+    src_match_name = st.text_input(
+        "اسم الماتش (السيستم)",
+        placeholder="مثال: Harrogate Town - Solihull Moors",
+    ).strip()
+
+with tc:
+    st.markdown("**من ترانسفرماركت**")
+    match_id = st.text_input(
+        "Match ID (ترانسفرماركت)",
+        value=_auto_id,
+        help="بيتعبّى لوحده من النص الملزوق.",
+    ).strip()
+    match_name = st.text_input(
+        "اسم الماتش (ترانسفرماركت)",
+        value=_auto_name,
+        placeholder="Harrogate Town vs Solihull Moors",
+    ).strip()
+
+if fs_text and not _auto_id:
+    st.caption(
+        "ℹ️ النص الملزوق مفيهوش بيانات الماتش — يعني إما نسخته بالماوس، "
+        "أو نسخة اليوزرسكريبت عندك قديمة. اكتب البيانات يدوي أو حدّث "
+        "اليوزرسكريبت."
+    )
+
+st.divider()
+
 if st.button("🚀 ابدأ المقارنة", type="primary", use_container_width=True):
     email = (st.session_state.get("reviewer_email") or "").strip()
     if not email:
@@ -1083,6 +1160,18 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         st.stop()
     if not EMAIL_RE.match(email):
         st.error(f"❌ الإيميل `{email}` شكله مش صح. اكتبه بالشكل name@company.com")
+        st.stop()
+    if not src_match_id:
+        st.error("❌ لازم Match ID من سيستمك — هو اللي يربط المراجعة بالماتش عندك.")
+        st.stop()
+    if not src_match_name:
+        st.error("❌ لازم اسم الماتش من سيستمك.")
+        st.stop()
+    if not match_id:
+        st.error(
+            "❌ لازم Match ID من ترانسفرماركت. لو النص مفيهوش، "
+            "خده من لينك الماتش — الرقم اللي في آخره."
+        )
         st.stop()
 
     if not internal_text.strip():
@@ -1137,22 +1226,10 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
             or p["side"] == want_side
         ]
     else:
-        fs_players = parse_Transfermarkt(fs_text, want_side)
+        fs_players = parse_flashscore(fs_text, want_side)
 
-    meta = parse_meta(fs_text) if not use_url else {}
-    match_id = meta.get("match_id", "")
-    match_link = meta.get("match_url", tm_url if use_url else "")
-    source_name = meta.get("source", "transfermarkt")
-
-    if use_url:
-        mm = re.search(r"spielbericht/(\d+)", tm_match_url(tm_url))
-        match_id = mm.group(1) if mm else ""
-
-    if not match_id:
-        match_id = st.text_input(
-            "⚠️ الـ Match ID مش موجود في النص — اكتبه يدوي للتسجيل:",
-            key="manual_mid",
-        ).strip()
+    match_link = _auto_link
+    source_name = _auto_source
 
     if not fs_players:
         st.error(
@@ -1162,12 +1239,12 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
 
     c1, c2, c3 = st.columns(3)
     c1.metric("لاعبين السورس", len(source_players))
-    c2.metric("لاعبين Transfermarkt", len(fs_players))
+    c2.metric("لاعبين Flashscore", len(fs_players))
     c3.metric("بتاريخ ميلاد", sum(1 for p in fs_players if p["dob"]))
 
     if not any(p["dob"] for p in fs_players):
         st.info(
-            "ℹ️ مفيش تواريخ ميلاد في نص Transfermarkt، فالمطابقة هتمشي "
+            "ℹ️ مفيش تواريخ ميلاد في نص Flashscore، فالمطابقة هتمشي "
             "بالأسماء والأرقام. عمود تطابق الميلاد هيبان ➖."
         )
 
@@ -1214,7 +1291,10 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
     ok_log, log_err = log_review([
         now_str(),
         email,
-        match_id or "—",
+        src_match_id,
+        src_match_name,
+        match_id,
+        match_name or "—",
         match_link or "—",
         want_side,
         len(source_players),
@@ -1228,7 +1308,13 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
     ])
 
     if ok_log:
-        st.success(f"📝 المراجعة اتسجلت في جوجل شيت باسم {email}")
+        st.success(
+            f"📝 اتسجلت في جوجل شيت — {src_match_name} "
+            f"(سيستم {src_match_id} / ترانسفرماركت {match_id}) "
+            f"باسم {email}"
+        )
+        if log_err:
+            st.warning(log_err)
     else:
         st.error(
             f"⚠️ النتيجة ظهرت بس **التسجيل فشل**: {log_err}\n\n"
@@ -1240,7 +1326,7 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
 
     if mixed_teams and only_fs:
         with st.expander(
-            f"👥 {len(only_fs)} لاعب في نص Transfermarkt ملهمش مقابل عندك "
+            f"👥 {len(only_fs)} لاعب في نص Flashscore ملهمش مقابل عندك "
             "(على الأغلب الفريق التاني)"
         ):
             st.caption(
