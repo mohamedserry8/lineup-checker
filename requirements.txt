@@ -1,9 +1,4 @@
 streamlit
 pandas
 pillow
-requests
-beautifulsoup4
-easyocr
-opencv-python-headless
-fuzzywuzzy
-python-Levenshtein
+google-genai
