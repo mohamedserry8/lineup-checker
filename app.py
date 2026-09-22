@@ -1192,6 +1192,7 @@ with tc:
         "soccerway": "سوكرواي",
         "espn": "ESPN",
         "tribuna": "تريبونا",
+        "ligafemenil": "دوري السيدات المكسيكي",
         "flashscore": "فلاش سكور",
     }.get(_auto_source, _auto_source or "المصدر")
 
