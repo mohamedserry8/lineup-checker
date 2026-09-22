@@ -8,9 +8,9 @@ st.set_page_config(
     page_title="أداة مطابقة التشكيلات الحية", page_icon="⚽", layout="wide"
 )
 
-st.title("⚽ أداة المطابقة المباشرة الحية (Flashscore Live Scraper)")
+st.title("⚽ أداة المطابقة الشاملة المباشرة (النظام الداخلي ↔ Flashscore)")
 st.write(
-    "تستخرج هذه الأداة بيانات التشكيلة ديناميكياً من رابط Flashscore المرفق وتُقارنها مع جدول النظام الداخلي."
+    "تتيح هذه الأداة مطابقة بيانات النظام الداخلي مع Flashscore تلقائياً عبر الرابط أو عبر لصق النص المباشر."
 )
 
 st.divider()
@@ -20,8 +20,8 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("1. بيانات الفريق الداخلي")
     raw_text = st.text_area(
-        "انسخ محتوى الجدول بالكامل والصقه هنا:",
-        height=240,
+        "انسخ محتوى الجدول الداخلي والصقه هنا:",
+        height=230,
         placeholder="مثال:\n1 28925 Dominik Reimann 1997-06-18 Germany\n17 1021244 Alexander Nollenberger 1997-06-04 Germany...",
     )
 
@@ -32,14 +32,26 @@ with col1:
     )
 
 with col2:
-    st.subheader("2. رابط المباراة من Flashscore")
-    flashscore_url = st.text_input(
-        "أدخل رابط المباراة:",
-        placeholder="https://www.flashscore.com/match/football/...",
+    st.subheader("2. بيانات Flashscore")
+    input_mode = st.radio(
+        "طريقة إدخال بيانات Flashscore:",
+        ["عبر رابط المباراة (تلقائي)", "لصق نص Flashscore يدويّاً (مضمون 100%)"],
+        horizontal=True,
     )
-    st.info(
-        "💡 يتم استخراج Match ID الحقيقي بدقة حتى مع وجود أسماء الفرق بالرابط."
-    )
+
+    if "رابط" in input_mode:
+        flashscore_url = st.text_input(
+            "أدخل رابط المباراة من Flashscore:",
+            placeholder="https://www.flashscore.com/match/football/...",
+        )
+        fs_manual_text = ""
+    else:
+        flashscore_url = ""
+        fs_manual_text = st.text_area(
+            "انسخ قائمة التشكيلة من موقع Flashscore والصقها هنا:",
+            height=150,
+            placeholder="مثال:\n1 Reimann D.\n17 Nollenberger A.\n3 Garcia MacNulty A....",
+        )
 
 
 # --- 1. تفكيك النص الداخلي (يدعم الأرقام من 0 حتى 1000) ---
@@ -94,116 +106,123 @@ def parse_pasted_text(text):
     return players
 
 
-# --- 2. دالة ذكية واستثنائية لاستخراج Match ID بدقة ---
-def extract_match_id(url):
-    # 1. البحث عن كود يسبقه شرطة - ومتبوع بـ / (مثل -CCQGbik8/)
-    match = re.search(r"-([a-zA-Z0-9]{8})(?:/|$)", url)
-    if match:
-        return match.group(1)
+# --- 2. تفكيك نص Flashscore اليدوي ---
+def parse_flashscore_manual_text(text):
+    team_data = {}
+    lines = text.strip().split("\n")
 
-    # 2. البحث بعد كلمة /match/ مباشرة
-    match = re.search(r"/match/([a-zA-Z0-9]{8})(?:/|$)", url)
-    if match:
-        return match.group(1)
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
 
-    # 3. البحث عن أي كود 8 خانات يحتوي على أرقام أو أحرف كبيرة ليضمن استبعاد الكلمات العادية
+        # البحث عن نمط رقم القميص والاسم (مثال: 1 Reimann D. أو 17 Nollenberger A.)
+        match = re.search(r"^(\d{1,4})\s+(.+)$", line)
+        if match:
+            num = int(match.group(1))
+            name = match.group(2).strip()
+            team_data[num] = {
+                "fs_id": "غير متوفر (إدخال يدوي)",
+                "name": name,
+                "dob": "غير متوفر",
+                "nationality": "غير متوفر",
+            }
+    return team_data
+
+
+# --- 3. جلب بيانات Flashscore عبر الرابط المباشر ---
+def extract_match_ids(url):
+    # استخراج كافة الأكواد المكونة من 8 أرقام وحروف
     candidates = re.findall(r"([a-zA-Z0-9]{8})", url)
-    for cand in candidates:
-        if (
-            any(c.isdigit() for c in cand) or any(c.isupper() for c in cand)
-        ) and cand.lower() not in [
-            "football",
-            "summary",
-            "lineups",
-            "matches",
-            "greuther",
-        ]:
-            return cand
-
-    return None
+    ignored = ["football", "summary", "lineups", "matches"]
+    valid_ids = [c for c in candidates if c.lower() not in ignored]
+    return valid_ids
 
 
 def fetch_flashscore_data(url, is_home):
-    match_id = extract_match_id(url)
-    if not match_id:
-        st.error(
-            "❌ تعذر استخراج كود المباراة (Match ID) من الرابط! يرجى التأكد من مسار الرابط."
-        )
+    match_ids = extract_match_ids(url)
+    if not match_ids:
+        st.error("❌ تعذر استخراج كود المباراة من الرابط!")
         return {}
 
-    feed_url = f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
-        "x-fsign": "SW1hZ2luZSB3aXRob3V0IG1lbnRpb25pbmc=",
+        "Referer": "https://www.flashscore.com/",
+        "Origin": "https://www.flashscore.com",
+        "X-Fsign": "SW1hZ2luZSB3aXRob3V0IG1lbnRpb25pbmc=",
     }
-
-    try:
-        res = requests.get(feed_url, headers=headers, timeout=12)
-        if res.status_code != 200 or not res.text:
-            st.error(
-                f"❌ لم يستجب سيرفر Flashscore (كود الاستجابة: {res.status_code})"
-            )
-            return {}
-        text = res.text
-    except Exception as e:
-        st.error(f"❌ خطأ أثناء الاتصال بـ Flashscore: {e}")
-        return {}
 
     target_side = "1" if is_home else "2"
     team_data = {}
 
-    items = text.split("~")
-    for item in items:
-        parts = item.split("÷")
-        kv = {}
-        for i in range(0, len(parts) - 1, 2):
-            kv[parts[i]] = parts[i + 1]
+    # تجربة الأكواد المستخرجة من الرابط حتى ينجح أحدهما
+    for match_id in match_ids:
+        feed_url = f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1"
+        try:
+            res = requests.get(feed_url, headers=headers, timeout=8)
+            if res.status_code == 200 and res.text:
+                items = res.text.split("~")
+                for item in items:
+                    parts = item.split("÷")
+                    kv = {}
+                    for i in range(0, len(parts) - 1, 2):
+                        kv[parts[i]] = parts[i + 1]
 
-        po = kv.get("PO", "")  # 1 = Home, 2 = Away
-        fu = kv.get("FU", "")  # رقم القميص
+                    po = kv.get("PO", "")
+                    fu = kv.get("FU", "")
 
-        if fu.isdigit():
-            num = int(fu)
-            if po == target_side or not po:
-                team_data[num] = {
-                    "fs_id": kv.get("PD", "غير متوفر"),
-                    "name": kv.get("IF", kv.get("PN", "غير متوفر")),
-                    "dob": kv.get("DO", "غير متوفر"),
-                    "nationality": kv.get("NA", "غير متوفر"),
-                }
+                    if fu.isdigit():
+                        num = int(fu)
+                        if po == target_side or not po:
+                            team_data[num] = {
+                                "fs_id": kv.get("PD", "غير متوفر"),
+                                "name": kv.get("IF", kv.get("PN", "غير متوفر")),
+                                "dob": kv.get("DO", "غير متوفر"),
+                                "nationality": kv.get("NA", "غير متوفر"),
+                            }
+                if team_data:
+                    return team_data
+        except Exception:
+            continue
 
     return team_data
 
 
-# --- 3. إجراء المقارنة والتطابق المباشر ---
+# --- 4. تنفيذ المقارنة ---
 st.divider()
 
 if st.button(
-    "🚀 ابدأ إجراء المقارنة الشاملة مع Flashscore",
-    type="primary",
-    use_container_width=True,
+    "🚀 ابدأ إجراء المقارنة الشاملة", type="primary", use_container_width=True
 ):
     if not raw_text.strip():
         st.warning("⚠️ يرجى لصق نص جدول النظام الداخلي أولاً!")
-    elif not flashscore_url.strip():
-        st.warning("⚠️ يرجى إدخل رابط المباراة من Flashscore!")
     else:
         source_players = parse_pasted_text(raw_text)
 
         if not source_players:
-            st.error("❌ تعذر تفكيك النص! يرجى التأكد من اختيار كامل الجدول.")
+            st.error("❌ تعذر تفكيك النص الداخلي!")
         else:
             is_home_team = "Home" in team_side
-            flashscore_data = fetch_flashscore_data(
-                flashscore_url, is_home_team
-            )
+
+            if "رابط" in input_mode:
+                if not flashscore_url.strip():
+                    st.warning("⚠️ يرجى إدخال رابط المباراة!")
+                    st.stop()
+                flashscore_data = fetch_flashscore_data(
+                    flashscore_url, is_home_team
+                )
+            else:
+                if not fs_manual_text.strip():
+                    st.warning("⚠️ يرجى لصق نص Flashscore!")
+                    st.stop()
+                flashscore_data = parse_flashscore_manual_text(fs_manual_text)
 
             if not flashscore_data:
                 st.error(
-                    "⚠️ لم يتم العثور على تشكيلة لهذا الفريق في رابط Flashscore المرفق!"
+                    "⚠️ تعذر العثور على تشكيلة في Flashscore! يمكنك التبديل إلى خيار 'لصق نص Flashscore يدويّاً' للمتابعة دون الاعتماد على الرابط."
                 )
             else:
                 comparison_results = []
@@ -214,8 +233,8 @@ if st.button(
 
                     fs_id = fs_p.get("fs_id", "غير موجود")
                     fs_name = fs_p.get("name", "غير موجود بالرقم")
-                    fs_dob = fs_p.get("dob", "غير موجود")
-                    fs_nat = fs_p.get("nationality", "غير موجود")
+                    fs_dob = fs_p.get("dob", "غير متوفر")
+                    fs_nat = fs_p.get("nationality", "غير متوفر")
 
                     # 1. مطابقة الرقم
                     number_matched = num in flashscore_data
@@ -228,9 +247,16 @@ if st.button(
                         if fs_name != "غير موجود بالرقم"
                         else 0
                     )
-                    name_matched = name_sim > 65 or (
-                        fs_name.lower() in p["name"].lower()
-                        and len(fs_name) > 3
+                    name_matched = (
+                        name_sim > 50
+                        or (
+                            fs_name.lower() in p["name"].lower()
+                            and len(fs_name) > 2
+                        )
+                        or (
+                            p["name"].lower() in fs_name.lower()
+                            and len(p["name"]) > 2
+                        )
                     )
 
                     # 3. مطابقة الجنسية
@@ -248,7 +274,7 @@ if st.button(
                         (p["dob"] == fs_dob) if fs_dob != "غير متوفر" else True
                     )
 
-                    # التقييم النهائي لحالة التطابق
+                    # التقييم النهائي
                     if (
                         number_matched
                         and name_matched
@@ -269,7 +295,6 @@ if st.button(
                             "اسم Flashscore": fs_name,
                             "تطابق الاسم": "✅" if name_matched else "❌",
                             "جنسية السورس": p["nationality"],
-                            "جنسية Flashscore": fs_nat,
                             "ID فلاش سكور": fs_id,
                             "حالة التطابق العامة": status,
                         }
@@ -278,7 +303,7 @@ if st.button(
                 df_comp = pd.DataFrame(comparison_results)
 
                 st.subheader(
-                    f"📊 جدول نتائج المقارنة والتطابق المباشر ({'صاحب الأرض - Home' if is_home_team else 'الضيف - Away'})"
+                    f"📊 نتائج المقارنة والتطابق ({'صاحب الأرض - Home' if is_home_team else 'الضيف - Away'})"
                 )
 
                 def highlight_status(val):
