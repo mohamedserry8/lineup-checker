@@ -5,12 +5,12 @@ import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="أداة مطابقة التشكيلات الشاملة", page_icon="⚽", layout="wide"
+    page_title="أداة مطابقة التشكيلات الحية", page_icon="⚽", layout="wide"
 )
 
-st.title("⚽ أداة المطابقة الشاملة (الاسم - الرقم - الجنسية)")
+st.title("⚽ أداة المطابقة المباشرة الحية (Flashscore Live Scraper)")
 st.write(
-    "تتيح هذه الأداة مطابقة أرقام القمصان (من 0 إلى 1000) والأسماء والجنسيات بين نظامك الداخلي وموقع Flashscore وتبيان التطابق الكامل أو الناقص."
+    "تستخرج هذه الأداة بيانات التشكيلة ديناميكياً من رابط Flashscore المرفق وتُقارنها مع جدول النظام الداخلي."
 )
 
 st.divider()
@@ -38,7 +38,7 @@ with col2:
         placeholder="https://www.flashscore.com/match/football/...",
     )
     st.info(
-        "💡 يتم فحص التطابق بشكل فردي لكل من: الرقم، الاسم، والجنسية مع تلوين حالة التطابق النهائية."
+        "💡 يتم الآن قراءة كود المباراة (Match ID) من الرابط وجلب التشكيلة الحية الحقيقية من Flashscore."
     )
 
 
@@ -60,7 +60,6 @@ def parse_pasted_text(text):
             current_section = "Started"
             continue
 
-        # النمط يدعم الأرقام حتى 4 خانات (\d{1,4}) ليشمل نطاق من 0 إلى 1000
         match = re.search(
             r"^(\d{1,4})\s+(\d+)\s+(.+?)\s+(\d{4}-\d{2}-\d{2})\s*(.*)$", line
         )
@@ -95,133 +94,69 @@ def parse_pasted_text(text):
     return players
 
 
-# --- 2. قاعدة بيانات Flashscore المكتملة لجميع اللاعبين الـ 20 ---
+# --- 2. سحب بيانات Flashscore الحقيقية والديناميكية عبر Feed API ---
 def fetch_flashscore_data(url, is_home):
-    return {
-        1: {
-            "fs_id": "G0xR19aP",
-            "name": "Dominik Reimann",
-            "dob": "1997-06-18",
-            "nationality": "Germany",
-        },
-        17: {
-            "fs_id": "a9L011xZ",
-            "name": "Alexander Nollenberger",
-            "dob": "1997-06-04",
-            "nationality": "Germany",
-        },
-        3: {
-            "fs_id": "k8M209xQ",
-            "name": "Anselmo García MacNulty",
-            "dob": "2003-02-19",
-            "nationality": "Republic of Ireland",
-        },
-        5: {
-            "fs_id": "84S3mO2b",
-            "name": "Tobias Müller",
-            "dob": "1994-07-08",
-            "nationality": "Germany",
-        },
-        7: {
-            "fs_id": "rXgS92aP",
-            "name": "Herbert Bockhorn",
-            "dob": "1995-01-31",
-            "nationality": "Germany",
-        },
-        21: {
-            "fs_id": "f5kL90xZ",
-            "name": "Falko Michel",
-            "dob": "2001-01-14",
-            "nationality": "Germany",
-        },
-        38: {
-            "fs_id": "m2P90qX1",
-            "name": "Luka-Mikael Hyryläinen",
-            "dob": "2004-08-25",
-            "nationality": "Finland",
-        },
-        26: {
-            "fs_id": "W9qL33a1",
-            "name": "Torben Müsel",
-            "dob": "1999-07-25",
-            "nationality": "Germany",
-        },
-        10: {
-            "fs_id": "z2Lp901X",
-            "name": "Moritz-Broni Kwarteng",
-            "dob": "1998-04-28",
-            "nationality": "Germany",
-        },
-        22: {
-            "fs_id": "K9zL10aP",
-            "name": "Mateusz Żukowski",
-            "dob": "2001-11-23",
-            "nationality": "Poland",
-        },
-        8: {
-            "fs_id": "p1Lq20zM",
-            "name": "Emmanuel Iyoha",
-            "dob": "1997-10-11",
-            "nationality": "Germany",
-        },
-        30: {
-            "fs_id": "Kj6O9bA1",
-            "name": "Noah Kruth",
-            "dob": "2003-06-24",
-            "nationality": "Germany",
-        },
-        4: {
-            "fs_id": "n8M10xLz",
-            "name": "Eldin Dzogovic",
-            "dob": "2003-06-08",
-            "nationality": "Luxembourg",
-        },
-        15: {
-            "fs_id": "b3Px019L",
-            "name": "Daniel Heber",
-            "dob": "1994-07-04",
-            "nationality": "Germany",
-        },
-        28: {
-            "fs_id": "c1M209xL",
-            "name": "Pierre Nadjombe",
-            "dob": "2003-05-10",
-            "nationality": "Togo",
-        },
-        11: {
-            "fs_id": "v5L019xP",
-            "name": "Felipe Marlon Chávez Fischer",
-            "dob": "2007-04-10",
-            "nationality": "Peru",
-        },
-        33: {
-            "fs_id": "m9P201xZ",
-            "name": "Leon Noel Mergner",
-            "dob": "2006-07-21",
-            "nationality": "Germany",
-        },
-        9: {
-            "fs_id": "q1L809xA",
-            "name": "Roko Šimić",
-            "dob": "2003-09-10",
-            "nationality": "Croatia",
-        },
-        29: {
-            "fs_id": "x3M109xK",
-            "name": "Richmond Tachie",
-            "dob": "1999-04-21",
-            "nationality": "Germany",
-        },
-        35: {
-            "fs_id": "z9L019xW",
-            "name": "Magnus Elias Baars",
-            "dob": "2006-10-12",
-            "nationality": "Germany",
-        },
+    # استخراج Match ID من الرابط (مثال: bochum-8Y2m6ADe -> 8Y2m6ADe)
+    match_id_match = re.search(r"([a-zA-Z0-9]{8})", url)
+    if not match_id_match:
+        st.error(
+            "❌ لم نتمكن من استخراج Match ID من رابط Flashscore! تأكد من صحة الرابط."
+        )
+        return {}
+
+    match_id = match_id_match.group(1)
+
+    # رابط الـ Feed المباشر لتشكيلات Flashscore
+    feed_url = (
+        f"https://local-sa.flashscore.ninja/35/x/feed/d_su_{match_id}_en_1"
+    )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "x-geoip": "1",
     }
 
+    try:
+        res = requests.get(feed_url, headers=headers, timeout=10)
+        if res.status_code != 200 or not res.text:
+            feed_url = f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1"
+            res = requests.get(feed_url, headers=headers, timeout=10)
+        text = res.text
+    except Exception as e:
+        st.error(f"❌ تعذر الاتصال بـ Flashscore: {e}")
+        return {}
 
-# --- 3. إجراء المقارنة والتطابق التفصيلي ---
+    target_side = "1" if is_home else "2"
+    team_data = {}
+
+    # تفكيك استجابة Flashscore الخاصة بالتشكيلة
+    items = text.split("~")
+    for item in items:
+        parts = item.split("÷")
+        kv = {}
+        for i in range(0, len(parts) - 1, 2):
+            kv[parts[i]] = parts[i + 1]
+
+        po = kv.get("PO", "")  # 1 = Home, 2 = Away
+        fu = kv.get("FU", "")  # Jersey Number
+
+        if fu.isdigit():
+            num = int(fu)
+            # تصفية اللاعبين حسب الفريق المختار (Home/Away)
+            if po == target_side or not po:
+                team_data[num] = {
+                    "fs_id": kv.get("PD", "غير متوفر"),
+                    "name": kv.get("IF", kv.get("PN", "غير متوفر")),
+                    "dob": kv.get("DO", "غير متوفر"),
+                    "nationality": kv.get("NA", "غير متوفر"),
+                }
+
+    return team_data
+
+
+# --- 3. إجراء المقارنة والتطابق المباشر ---
 st.divider()
 
 if st.button(
@@ -231,6 +166,8 @@ if st.button(
 ):
     if not raw_text.strip():
         st.warning("⚠️ يرجى لصق نص جدول النظام الداخلي أولاً!")
+    elif not flashscore_url.strip():
+        st.warning("⚠️ يرجى إدخال رابط المباراة من Flashscore!")
     else:
         source_players = parse_pasted_text(raw_text)
 
@@ -242,73 +179,96 @@ if st.button(
                 flashscore_url, is_home_team
             )
 
-            comparison_results = []
-
-            for p in source_players:
-                num = p["number"]
-                fs_p = flashscore_data.get(num, {})
-
-                fs_id = fs_p.get("fs_id", "غير موجود")
-                fs_name = fs_p.get("name", "غير موجود بالرقم")
-                fs_dob = fs_p.get("dob", "غير موجود")
-                fs_nat = fs_p.get("nationality", "غير موجود")
-
-                # 1. مطابقة رقم القميص
-                number_matched = num in flashscore_data
-
-                # 2. مطابقة الاسم
-                name_sim = fuzz.token_sort_ratio(
-                    p["name"].lower(), fs_name.lower()
+            if not flashscore_data:
+                st.error(
+                    "⚠️ لم يتم العثور على تشكيلة لهذا الفريق في رابط Flashscore المرفق!"
                 )
-                name_matched = name_sim > 70
+            else:
+                comparison_results = []
 
-                # 3. مطابقة الجنسية
-                nat_matched = (
-                    p["nationality"].lower() in fs_nat.lower()
-                    or fs_nat.lower() in p["nationality"].lower()
+                for p in source_players:
+                    num = p["number"]
+                    fs_p = flashscore_data.get(num, {})
+
+                    fs_id = fs_p.get("fs_id", "غير موجود")
+                    fs_name = fs_p.get("name", "غير موجود بالرقم")
+                    fs_dob = fs_p.get("dob", "غير موجود")
+                    fs_nat = fs_p.get("nationality", "غير موجود")
+
+                    # 1. مطابقة الرقم
+                    number_matched = num in flashscore_data
+
+                    # 2. مطابقة الاسم
+                    name_sim = (
+                        fuzz.token_sort_ratio(
+                            p["name"].lower(), fs_name.lower()
+                        )
+                        if fs_name != "غير موجود بالرقم"
+                        else 0
+                    )
+                    name_matched = name_sim > 65 or (
+                        fs_name.lower() in p["name"].lower() and len(fs_name) > 3
+                    )
+
+                    # 3. مطابقة الجنسية
+                    nat_matched = (
+                        (
+                            p["nationality"].lower() in fs_nat.lower()
+                            or fs_nat.lower() in p["nationality"].lower()
+                        )
+                        if fs_nat != "غير متوفر"
+                        else True
+                    )
+
+                    # 4. مطابقة تاريخ الميلاد
+                    dob_matched = (
+                        (p["dob"] == fs_dob) if fs_dob != "غير متوفر" else True
+                    )
+
+                    # التقييم النهائي لحالة التطابق
+                    if (
+                        number_matched
+                        and name_matched
+                        and nat_matched
+                        and dob_matched
+                    ):
+                        status = "✅ تطابق كامل"
+                    elif number_matched and name_matched:
+                        status = "⚠️ تطابق ناقص (اختلاف بيانات)"
+                    else:
+                        status = "❌ غير متطابق"
+
+                    comparison_results.append(
+                        {
+                            "رقم القميص": num,
+                            "تطابق الرقم": "✅" if number_matched else "❌",
+                            "اسم السورس": p["name"],
+                            "اسم Flashscore": fs_name,
+                            "تطابق الاسم": "✅" if name_matched else "❌",
+                            "جنسية السورس": p["nationality"],
+                            "جنسية Flashscore": fs_nat,
+                            "ID فلاش سكور": fs_id,
+                            "حالة التطابق العامة": status,
+                        }
+                    )
+
+                df_comp = pd.DataFrame(comparison_results)
+
+                st.subheader(
+                    f"📊 جدول نتائج المقارنة والتطابق المباشر ({'صاحب الأرض - Home' if is_home_team else 'الضيف - Away'})"
                 )
 
-                # 4. مطابقة تاريخ الميلاد
-                dob_matched = p["dob"] == fs_dob
+                def highlight_status(val):
+                    if "✅ تطابق كامل" in str(val):
+                        return "background-color: #1e4620; color: white;"
+                    elif "⚠️" in str(val):
+                        return "background-color: #856404; color: white;"
+                    else:
+                        return "background-color: #721c24; color: white;"
 
-                # تقييم حالة التطابق العامة
-                if number_matched and name_matched and nat_matched and dob_matched:
-                    status = "✅ تطابق كامل"
-                elif number_matched and (name_matched or nat_matched):
-                    status = "⚠️ تطابق ناقص (يوجد اختلاف)"
-                else:
-                    status = "❌ غير متطابق"
-
-                comparison_results.append(
-                    {
-                        "رقم القميص": num,
-                        "تطابق الرقم": "✅" if number_matched else "❌",
-                        "اسم السورس": p["name"],
-                        "اسم Flashscore": fs_name,
-                        "تطابق الاسم": "✅" if name_matched else "❌",
-                        "جنسية السورس": p["nationality"],
-                        "جنسية Flashscore": fs_nat,
-                        "تطابق الجنسية": "✅" if nat_matched else "❌",
-                        "ID فلاش سكور": fs_id,
-                        "حالة التطابق العامة": status,
-                    }
+                st.dataframe(
+                    df_comp.style.map(
+                        highlight_status, subset=["حالة التطابق العامة"]
+                    ),
+                    use_container_width=True,
                 )
-
-            df_comp = pd.DataFrame(comparison_results)
-
-            st.subheader("📊 جدول نتائج المقارنة والتطابق التفصيلي")
-
-            def highlight_status(val):
-                if "✅ تطابق كامل" in str(val):
-                    return "background-color: #1e4620; color: white;"
-                elif "⚠️" in str(val):
-                    return "background-color: #856404; color: white;"
-                else:
-                    return "background-color: #721c24; color: white;"
-
-            st.dataframe(
-                df_comp.style.map(
-                    highlight_status, subset=["حالة التطابق العامة"]
-                ),
-                use_container_width=True,
-            )
