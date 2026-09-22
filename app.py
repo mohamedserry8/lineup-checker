@@ -1,17 +1,16 @@
 import re
-import cloudscraper
+from curl_cffi import requests as cffi_requests
 from fuzzywuzzy import fuzz
 import pandas as pd
-import requests
 import streamlit as st
 
 st.set_page_config(
     page_title="أداة مطابقة التشكيلات التلقائية", page_icon="⚽", layout="wide"
 )
 
-st.title("⚽ أداة المطابقة التلقائية الحية (Flashscore Live Scraper)")
+st.title("⚽ أداة المطابقة التلقائية الحية (Flashscore TLS Bypass)")
 st.write(
-    "ضع رابط المباراة ونظامك الداخلي، وسيقوم النظام أوتوماتيكياً بجلب البروفايلات والـ IDs والمقارنة بنسبة 100%."
+    "تستخرج هذه الأداة التشكيلات الحية مباشرة عبر تجاوز حظر السحاب للروابط."
 )
 
 st.divider()
@@ -39,7 +38,7 @@ with col2:
         placeholder="https://www.flashscore.com/match/football/...",
     )
     st.info(
-        "💡 يتم جلب تشكيلة الفريق المختار تلقائياً واستخراج Flashscore IDs وتواريخ الميلاد مباشرة من السيرفر."
+        "💡 يتم فتح اتصال محاكي لمتصفح Chrome لتجاوز جدار الحماية وسحب البيانات تلقائياً."
     )
 
 
@@ -95,91 +94,93 @@ def parse_pasted_text(text):
     return players
 
 
-# --- 2. استخراج Match ID الدقيق ---
-def extract_match_id(url):
-    # استخراج الكود المكون من 8 خانات المسبوق بشرطة قبل كلمة summary أو lineups
-    match = re.search(r"-([a-zA-Z0-9]{8})(?:/|\?|$)", url)
-    if match:
-        return match.group(1)
+# --- 2. استخراج كافة أكواد الأرقام والحروف الفريدة من الرابط ---
+def extract_candidate_match_ids(url):
+    candidates = re.findall(r"([a-zA-Z0-9]{8})", url)
+    ignored = [
+        "football",
+        "summary",
+        "lineups",
+        "matches",
+        "https",
+        "http",
+        "www",
+    ]
+    valid_ids = []
+    for c in candidates:
+        if c.lower() not in ignored and c not in valid_ids:
+            valid_ids.append(c)
+    return valid_ids
 
-    match = re.search(r"football/[^/]*?-([a-zA-Z0-9]{8})", url)
-    if match:
-        return match.group(1)
 
-    return None
-
-
-# --- 3. جلب بيانات Flashscore بنطاقات رسمية وموثوقة ---
-def fetch_flashscore_data_automated(url, is_home):
-    match_id = extract_match_id(url)
-    if not match_id:
-        st.error("❌ لم نتمكن من تحديد كود المباراة من الرابط المرفق!")
+# --- 3. جلب بيانات Flashscore مع محاكاة متصفح Chrome لتجاوز Cloudflare ---
+def fetch_flashscore_data_tls(url, is_home):
+    match_ids = extract_candidate_match_ids(url)
+    if not match_ids:
+        st.error("❌ تعذر العثور على أي أكواد في الرابط!")
         return {}
 
-    scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "desktop": True}
-    )
-
-    # تجربة السيرفرات الرسمية المباشرة لـ Flashscore CDN فقط
-    endpoints = [
-        f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1",
-        f"https://2.ds.flashscore.com/x/feed/d_su_{match_id}_en_1",
-        f"https://1.ds.flashscore.com/x/feed/d_su_{match_id}_en_1",
-    ]
-
+    target_side = "1" if is_home else "2"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
         "Referer": "https://www.flashscore.com/",
+        "Origin": "https://www.flashscore.com",
         "X-Fsign": "SW1hZ2luZSB3aXRob3V0IG1lbnRpb25pbmc=",
-        "x-geoip": "1",
+        "X-Requested-With": "XMLHttpRequest",
     }
 
-    text_response = None
-    for feed_url in endpoints:
-        try:
-            res = scraper.get(feed_url, headers=headers, timeout=10)
-            if res.status_code == 200 and res.text:
-                text_response = res.text
-                break
-        except Exception:
-            continue
+    # تجربة كافة الأكواد المكتشفة في الرابط
+    for match_id in match_ids:
+        endpoints = [
+            f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1",
+            f"https://2.ds.flashscore.com/x/feed/d_su_{match_id}_en_1",
+        ]
 
-    if not text_response:
-        st.error(
-            "❌ تعذر الاتصال بـ Flashscore. قد تكون الخدمة محجوبة مؤقتاً على خوادم السحاب."
-        )
-        return {}
+        for feed_url in endpoints:
+            try:
+                # استخدام curl_cffi لمحاكاة محرك Chrome TLS
+                res = cffi_requests.get(
+                    feed_url,
+                    headers=headers,
+                    impersonate="chrome120",
+                    timeout=10,
+                )
 
-    target_side = "1" if is_home else "2"
-    team_data = {}
+                if res.status_code == 200 and res.text and "~" in res.text:
+                    team_data = {}
+                    items = res.text.split("~")
+                    for item in items:
+                        parts = item.split("÷")
+                        kv = {}
+                        for i in range(0, len(parts) - 1, 2):
+                            kv[parts[i]] = parts[i + 1]
 
-    items = text_response.split("~")
-    for item in items:
-        parts = item.split("÷")
-        kv = {}
-        for i in range(0, len(parts) - 1, 2):
-            kv[parts[i]] = parts[i + 1]
+                        po = kv.get("PO", "")
+                        fu = kv.get("FU", "")
 
-        po = kv.get("PO", "")  # 1 = Home, 2 = Away
-        fu = kv.get("FU", "")  # رقم القميص
+                        if fu.isdigit():
+                            num = int(fu)
+                            if po == target_side or not po:
+                                team_data[num] = {
+                                    "fs_id": kv.get("PD", "غير متوفر"),
+                                    "name": kv.get(
+                                        "IF", kv.get("PN", "غير متوفر")
+                                    ),
+                                    "dob": kv.get("DO", "غير متوفر"),
+                                    "nationality": kv.get("NA", "غير متوفر"),
+                                }
+                    if team_data:
+                        return team_data
+            except Exception:
+                continue
 
-        if fu.isdigit():
-            num = int(fu)
-            if po == target_side or not po:
-                team_data[num] = {
-                    "fs_id": kv.get("PD", "غير متوفر"),
-                    "name": kv.get("IF", kv.get("PN", "غير متوفر")),
-                    "dob": kv.get("DO", "غير متوفر"),
-                    "nationality": kv.get("NA", "غير متوفر"),
-                }
-
-    return team_data
+    return {}
 
 
-# --- 4. تشغيل المقارنة والتحقق التلقائي ---
+# --- 4. إجراء المقارنة ---
 st.divider()
 
 if st.button(
@@ -188,7 +189,7 @@ if st.button(
     use_container_width=True,
 ):
     if not raw_text.strip():
-        st.warning("⚠️ يرجى لصق جدول النظام الداخلي أولاً!")
+        st.warning("⚠️ يرجى لصق نص جدول النظام الداخلي أولاً!")
     elif not flashscore_url.strip():
         st.warning("⚠️ يرجى إدخال رابط المباراة من Flashscore!")
     else:
@@ -200,15 +201,15 @@ if st.button(
             is_home_team = "Home" in team_side
 
             with st.spinner(
-                "جاري الاتصال بـ Flashscore وجلب بروفايلات اللاعبين تلقائياً..."
+                "جاري فتح الاتصال المحاكي وسحب بيانات Flashscore الحية..."
             ):
-                flashscore_data = fetch_flashscore_data_automated(
+                flashscore_data = fetch_flashscore_data_tls(
                     flashscore_url, is_home_team
                 )
 
             if not flashscore_data:
                 st.error(
-                    "⚠️ لم يرجع الرابط أي تشكيلة لهذا الفريق! تأكد من وجود التشكيلة على Flashscore واختيار (Home / Away) الصحيح."
+                    "⚠️ لم نتمكن من الوصول للتشكيلة تلقائياً. يرجى التأكد من اختيار (Home / Away) بشكل صحيح وجودة الرابط."
                 )
             else:
                 comparison_results = []
@@ -222,10 +223,8 @@ if st.button(
                     fs_dob = fs_p.get("dob", "غير متوفر")
                     fs_nat = fs_p.get("nationality", "غير متوفر")
 
-                    # 1. مطابقة الرقم
                     number_matched = num in flashscore_data
 
-                    # 2. مطابقة الاسم
                     name_sim = (
                         fuzz.token_sort_ratio(
                             p["name"].lower(), fs_name.lower()
@@ -245,7 +244,6 @@ if st.button(
                         )
                     )
 
-                    # 3. مطابقة الجنسية
                     nat_matched = (
                         (
                             p["nationality"].lower() in fs_nat.lower()
@@ -255,12 +253,10 @@ if st.button(
                         else True
                     )
 
-                    # 4. مطابقة تاريخ الميلاد
                     dob_matched = (
                         (p["dob"] == fs_dob) if fs_dob != "غير متوفر" else True
                     )
 
-                    # التقييم النهائي
                     if (
                         number_matched
                         and name_matched
@@ -289,9 +285,7 @@ if st.button(
 
                 df_comp = pd.DataFrame(comparison_results)
 
-                st.success(
-                    "✅ تم سحب تشكيلة Flashscore الحية بنجاح بنسبة 100%!"
-                )
+                st.success("✅ تم سحب التشكيلة الحية بنجاح بنسبة 100%!")
                 st.subheader(
                     f"📊 نتائج المقارنة والتحقق الآلي ({'صاحب الأرض - Home' if is_home_team else 'الضيف - Away'})"
                 )
