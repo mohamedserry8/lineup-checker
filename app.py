@@ -38,7 +38,7 @@ with col2:
         placeholder="https://www.flashscore.com/match/football/...",
     )
     st.info(
-        "💡 يتم استخراج Match ID من الرابط تلقائياً وجلب التشكيلة الحية الحقيقية من سيرفرات Flashscore."
+        "💡 يتم استخراج Match ID الحقيقي بدقة حتى مع وجود أسماء الفرق بالرابط."
     )
 
 
@@ -94,21 +94,32 @@ def parse_pasted_text(text):
     return players
 
 
-# --- 2. دالة دقيقة لاستخراج Match ID وضمان جلب البيانات ---
+# --- 2. دالة ذكية واستثنائية لاستخراج Match ID بدقة ---
 def extract_match_id(url):
-    # قص رابط الدومين لتجنب التقاط كلمة flashscore أو football
-    path = (
-        url.split("flashscore.com/")[-1] if "flashscore.com/" in url else url
-    )
+    # 1. البحث عن كود يسبقه شرطة - ومتبوع بـ / (مثل -CCQGbik8/)
+    match = re.search(r"-([a-zA-Z0-9]{8})(?:/|$)", url)
+    if match:
+        return match.group(1)
 
-    # استخراج كافة الأكواد المكونة من 8 أرقام وحروف
-    candidates = re.findall(r"([a-zA-Z0-9]{8})", path)
+    # 2. البحث بعد كلمة /match/ مباشرة
+    match = re.search(r"/match/([a-zA-Z0-9]{8})(?:/|$)", url)
+    if match:
+        return match.group(1)
 
-    # تصفية الكلمات العامة
-    ignored_words = ["football", "summary", "lineups", "matches"]
+    # 3. البحث عن أي كود 8 خانات يحتوي على أرقام أو أحرف كبيرة ليضمن استبعاد الكلمات العادية
+    candidates = re.findall(r"([a-zA-Z0-9]{8})", url)
     for cand in candidates:
-        if cand.lower() not in ignored_words:
+        if (
+            any(c.isdigit() for c in cand) or any(c.isupper() for c in cand)
+        ) and cand.lower() not in [
+            "football",
+            "summary",
+            "lineups",
+            "matches",
+            "greuther",
+        ]:
             return cand
+
     return None
 
 
@@ -120,7 +131,6 @@ def fetch_flashscore_data(url, is_home):
         )
         return {}
 
-    # استخدام رابط السيرفر المباشر والرسمي لـ Flashscore
     feed_url = f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1"
     headers = {
         "User-Agent": (
