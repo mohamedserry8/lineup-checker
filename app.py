@@ -208,20 +208,31 @@ def parse_internal(text: str):
 # تفكيك نص Flashscore
 # ---------------------------------------------------------------------------
 
+# علامات زي (G) للحارس و (C) للكابتن -- بتتشال من الاسم
+MARKER_RE = re.compile(r"\(\s*(?:G|C|GK|VC)\s*\)", re.I)
+
+# سطور عناوين الأقسام -- بتتجاهل
+SECTION_WORDS = (
+    "substitutes", "subs", "bench", "starting", "lineup", "formation",
+    "coach", "manager", "missing players", "injuries", "suspended",
+)
+
+
 def parse_flashscore(text: str, want_side: str):
     """
-    بيقبل صيغتين:
+    بيقبل تلات صيغ:
 
-    أ) مخرج السكريبت (TSV بترتيب: number, name, dob, country, side, fs_id)
-    ب) نسخ يدوي من الصفحة -- رقم + اسم، والتاريخ لو موجود في أي مكان
+    أ) مخرج السكريبت (TSV: number, name, dob, country, side, fs_id)
+    ب) نسخ مباشر من الصفحة بالرقم ملزوق في الاسم: "7Bockhorn H."
+    ج) اسم بدون رقم: "Reimann D."
 
     want_side: "HOME" أو "AWAY" أو "ANY"
     """
     players = []
 
     for raw in text.strip().splitlines():
-        line = raw.rstrip()
-        if not line.strip() or line.lstrip().startswith("#"):
+        line = raw.strip()
+        if not line or line.startswith("#"):
             continue
 
         if "\t" in line:
@@ -229,16 +240,26 @@ def parse_flashscore(text: str, want_side: str):
             cols += [""] * (6 - len(cols))
             number, name, dob, country, side, fs_id = cols[:6]
         else:
-            m = re.match(r"^\s*(\d{1,2})[.\s]+(.+)$", line)
-            if not m:
+            low = line.lower()
+            if len(line) < 32 and any(w in low for w in SECTION_WORDS):
                 continue
-            number, rest = m.group(1), m.group(2).strip()
-            dob_m = re.search(
-                r"\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4}", rest
-            )
+
+            cleaned = MARKER_RE.sub(" ", line).strip()
+            if not cleaned or not re.search(r"[A-Za-zÀ-ÿ]", cleaned):
+                continue
+
+            # الرقم ملزوق أو مفصول أو مش موجود خالص
+            m = re.match(r"^(\d{1,3})\s*(.+)$", cleaned)
+            if m:
+                number, rest = m.group(1), m.group(2).strip()
+            else:
+                number, rest = "", cleaned
+
+            dob_m = re.search(r"\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4}", rest)
             dob = dob_m.group(0) if dob_m else ""
             if dob:
                 rest = rest.replace(dob, " ")
+
             name, country, side, fs_id = rest.strip(), "", "", ""
 
         name = re.sub(r"\s+", " ", name).strip(" -–—\t")
@@ -407,17 +428,22 @@ st.caption(
 with st.expander("📋 إزاي تجيب تشكيلة Flashscore", expanded=False):
     st.markdown(
         """
-1. افتح صفحة الماتش على تاب **Lineups** واستنى التشكيلة تظهر.
-2. `F12` ← تاب **Console**. لو كروم طلب، اكتب `allow pasting` واضغط Enter.
-3. الصق محتوى `flashscore-extract.js` كله واضغط Enter.
-4. استنى لحد ما يقولك تم النسخ، وبعدين الصق هنا في الخانة اليمين.
+**الطريقة السهلة (بالماوس):**
 
-السكريبت بيجيب رقم القميص والاسم والفريق، وبيحاول يجيب تاريخ الميلاد
-والجنسية من بروفايل كل لاعب. لو تواريخ الميلاد مجاتش، المقارنة هتمشي
-بالأسماء والأرقام بس وهتلاقي ➖ في عمود تطابق الميلاد.
+1. افتح صفحة الماتش على تاب **Lineups**.
+2. علّم على التشكيلة بالماوس من أول لاعب لآخر البدلاء، واضغط `Ctrl+C`.
+3. الصق هنا في الخانة اليمين.
 
-**بديل بدون سكريبت:** علّم على التشكيلة في الصفحة بالماوس، `Ctrl+C`،
-والصق هنا. هتجيب الأرقام والأسماء بس.
+عادي لو النص فيه الفريقين مع بعض — علّم على المربع اللي تحت
+"النص فيه الفريقين" وهي هتتعامل مع ده.
+
+بالطريقة دي هتجيب **الأرقام والأسماء بس**، لأن تاريخ الميلاد مش
+معروض في صفحة التشكيلة أصلاً. عمود تطابق الميلاد هيبان ➖.
+
+---
+
+**الطريقة الكاملة (بتاريخ الميلاد):** لازم سكريبت يفتح بروفايل كل
+لاعب. لو محتاجها، قول لـ Claude وهو يجهزها لك.
         """
     )
 
@@ -437,14 +463,20 @@ with col1:
 with col2:
     st.subheader("2. Flashscore")
     fs_text = st.text_area(
-        "الصق مخرج السكريبت:",
+        "الصق التشكيلة:",
         height=300,
-        placeholder="#number\tname\tdob\tcountry\tside\tfs_id\n"
-                    "30\tKruth N.\t2003-06-24\tGermany\tAWAY\tGbn7WgOf",
+        placeholder="7Bockhorn H.\n5Muller T.\nSubstitutes\n"
+                    "35Baars M.\n11Chavez F.\n4Dzogovic E.",
+    )
+    mixed_teams = st.checkbox(
+        "النص فيه الفريقين مع بعض",
+        value=True,
+        help="لاعبين الفريق التاني هيتحطوا في قسم منفصل بدل ما "
+             "يظهروا كأخطاء في الجدول الأساسي.",
     )
     side_choice = st.radio(
-        "الفريق اللي بتقارنه:",
-        ["AWAY (الضيف)", "HOME (صاحب الأرض)", "ANY (كل اللي ملزوق)"],
+        "فلترة بالفريق (تنفع مع مخرج السكريبت بس):",
+        ["ANY (كل اللي ملزوق)", "AWAY (الضيف)", "HOME (صاحب الأرض)"],
         horizontal=False,
     )
 
@@ -488,13 +520,19 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         )
 
     pairs, only_src, only_fs = match_squads(source_players, fs_players)
-    df = build_report(pairs, only_src, only_fs)
+
+    # لما النص فيه الفريقين، اللاعبين الزيادة هما الفريق التاني --
+    # مش أخطاء، فبيروحوا قسم منفصل تحت.
+    df = build_report(pairs, only_src, [] if mixed_teams else only_fs)
 
     full = sum(1 for r in df["الحالة"] if r.startswith("✅"))
-    st.subheader(
+    headline = (
         f"📊 النتيجة — {full} تطابق كامل، {len(pairs) - full} محتاج مراجعة، "
-        f"{len(only_src)} عندك بس، {len(only_fs)} عندهم بس"
+        f"{len(only_src)} عندك ومش عندهم"
     )
+    if not mixed_teams:
+        headline += f"، {len(only_fs)} عندهم ومش عندك"
+    st.subheader(headline)
 
     def color_status(val):
         text = str(val)
@@ -516,3 +554,26 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         "lineup_check.csv",
         "text/csv",
     )
+
+    if mixed_teams and only_fs:
+        with st.expander(
+            f"👥 {len(only_fs)} لاعب في نص Flashscore ملهمش مقابل عندك "
+            "(على الأغلب الفريق التاني)"
+        ):
+            st.caption(
+                "راجع القائمة دي بسرعة: لو لقيت فيها لاعب المفروض يكون "
+                "في فريقك، يبقى فيه مشكلة حقيقية."
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "رقم": p["shirt"] if p["shirt"] is not None else "—",
+                        "الاسم": p["name"],
+                        "الميلاد": p["dob"] or "—",
+                        "الفريق": p["side"],
+                    }
+                    for p in only_fs
+                ]),
+                use_container_width=True,
+                hide_index=True,
+            )
