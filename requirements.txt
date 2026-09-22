@@ -1,4 +1,6 @@
 streamlit
 pandas
-pillow
-google-genai
+requests
+beautifulsoup4
+fuzzywuzzy
+python-Levenshtein
