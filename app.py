@@ -19,8 +19,10 @@ Lineup Checker -- مقارنة تشكيلة السيستم الداخلي بتش
 """
 
 import re
+import time
 import unicodedata
 from datetime import datetime
+from urllib.parse import urljoin, urlparse
 
 import pandas as pd
 import streamlit as st
@@ -29,6 +31,19 @@ try:
     from rapidfuzz import fuzz
 except ImportError:  # pragma: no cover
     from fuzzywuzzy import fuzz
+
+try:
+    from bs4 import BeautifulSoup
+    HAVE_BS4 = True
+except ImportError:  # pragma: no cover
+    HAVE_BS4 = False
+
+try:
+    import cloudscraper
+    HAVE_SCRAPER = True
+except ImportError:  # pragma: no cover
+    import requests
+    HAVE_SCRAPER = False
 
 
 NAME_MATCH_THRESHOLD = 85
@@ -326,6 +341,293 @@ def parse_flashscore(text: str, want_side: str):
 
 
 # ---------------------------------------------------------------------------
+# جلب ترانسفرماركت مباشرة من الأداة
+# ---------------------------------------------------------------------------
+
+TM_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _session():
+    if HAVE_SCRAPER:
+        return cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "desktop": True}
+        )
+    return requests.Session()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def tm_get(url: str):
+    """يرجّع (html, status, error). النتيجة بتتكاش 15 دقيقة."""
+    try:
+        res = _session().get(url, headers=TM_HEADERS, timeout=25)
+        return res.text, res.status_code, None
+    except Exception as exc:
+        return "", None, str(exc)
+
+
+def tm_match_url(raw: str) -> str:
+    """
+    يحوّل أي لينك ماتش لصفحة التشكيلة.
+    /spielbericht/index/spielbericht/123  ->  /aufstellung/spielbericht/123
+    """
+    raw = raw.strip()
+    if not raw:
+        return ""
+    if not raw.startswith("http"):
+        # لينك ملزوق بدون https:// -- بدومين أو بمسار بس
+        if re.match(r"(www\.)?transfermarkt\.", raw, re.I):
+            raw = "https://" + raw
+        else:
+            raw = "https://www.transfermarkt.com/" + raw.lstrip("/")
+
+    p = urlparse(raw)
+    m = re.search(r"/spielbericht/(?:index/spielbericht/)?(\d+)", p.path)
+    if not m:
+        m = re.search(r"/(\d{4,})(?:/|$)", p.path)
+    if not m:
+        return raw
+
+    mid = m.group(1)
+    slug = p.path.lstrip("/").split("/")[0] or "spielbericht"
+    return f"{p.scheme}://{p.netloc}/{slug}/aufstellung/spielbericht/{mid}"
+
+
+def tm_parse_lineup(html: str, base_url: str):
+    """
+    يطلّع اللاعبين من صفحة التشكيلة.
+
+    الشكل اللي بنعتمد عليه (متأكدين منه من الصفحة الحقيقية):
+      <a title="Mark Oxley" href="/mark-oxley/leistungsdatendetails/spieler/67232/...">
+      <a href="/mark-oxley/profil/spieler/67232"><img title="Mark Oxley" ...>
+    فالمشترك هو /spieler/{id}. والفريق بيتحدد من لينك النادي
+    (/startseite/verein/{id}) اللي في نفس الصندوق.
+    """
+    if not HAVE_BS4:
+        return [], "مكتبة beautifulsoup4 مش متثبتة"
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # الفريقين من لينك الماتش: {home}_{away}
+    slug = urlparse(base_url).path.lstrip("/").split("/")[0]
+    home_slug, _, away_slug = slug.partition("_")
+
+    by_id = {}
+    for a in soup.select('a[href*="/spieler/"]'):
+        href = a.get("href") or ""
+        m = re.search(r"/spieler/(\d+)", href)
+        if not m:
+            continue
+        pid = m.group(1)
+
+        name = (a.get("title") or a.get_text() or "").strip()
+        if not name:
+            img = a.find("img")
+            if img:
+                name = (img.get("title") or img.get("alt") or "").strip()
+        name = re.sub(r"\s+", " ", name).strip()
+        if len(name) < 2:
+            continue
+
+        # الصندوق = أقرب أب فيه لينك نادي
+        club = ""
+        node = a
+        for _ in range(8):
+            node = node.parent
+            if node is None:
+                break
+            link = node.find("a", href=re.compile(r"/startseite/verein/"))
+            if link:
+                club = (link.get("href") or "").lstrip("/").split("/")[0]
+                break
+
+        # الجنسيات من أعلام نفس الصف
+        countries, row = [], a
+        for _ in range(6):
+            row = row.parent
+            if row is None:
+                break
+            flags = row.find_all("img", class_=re.compile(r"flagge"))
+            for f in flags:
+                t = (f.get("title") or "").strip()
+                if t and t not in countries:
+                    countries.append(t)
+            if countries:
+                break
+
+        # العمر ورقم القميص من نص الصف
+        age, shirt = "", None
+        row = a
+        for _ in range(6):
+            row = row.parent
+            if row is None:
+                break
+            txt = re.sub(r"\s+", " ", row.get_text(" ", strip=True))
+            if not age:
+                am = re.search(r"\((\d{1,2})\s*(?:years old|Jahre)", txt, re.I)
+                if am:
+                    age = am.group(1)
+            if shirt is None:
+                nm = re.search(r"(?:^|\s)(\d{1,2})(?:\s|$)", txt.replace(name, " "))
+                if nm:
+                    shirt = int(nm.group(1))
+            if age and shirt is not None:
+                break
+            if len(txt) > 600:
+                break
+
+        prev = by_id.get(pid)
+        if prev and len(prev["name"]) >= len(name):
+            continue
+
+        side = "HOME" if club and club == home_slug else (
+            "AWAY" if club and club == away_slug else "UNKNOWN"
+        )
+
+        by_id[pid] = {
+            "tm_id": pid,
+            "name": name,
+            "shirt": shirt,
+            "side": side,
+            "nationality": "|".join(countries),
+            "age": age,
+            "dob": "",
+            "profile": urljoin(
+                base_url, f"/{href.lstrip('/').split('/')[0]}/profil/spieler/{pid}"
+            ),
+        }
+
+    players = list(by_id.values())
+    note = ""
+    if players and all(p["side"] == "UNKNOWN" for p in players):
+        note = "معرفتش أحدد الفريقين من لينكات الأندية"
+    return players, note
+
+
+DOB_PATTERNS = [
+    re.compile(
+        r"(?:Date of birth|Geburtsdatum)[^:]*:?\s*<[^>]*>\s*(?:<[^>]*>\s*)?"
+        r"(\d{1,2}[./-]\d{1,2}[./-]\d{4})", re.I),
+    re.compile(
+        r"(?:Date of birth|Geburtsdatum)[\s\S]{0,250}?(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
+        re.I),
+    re.compile(r"waspassiertheute/aktuell/new/datum/(\d{4}-\d{2}-\d{2})", re.I),
+    re.compile(r'itemprop=["\']birthDate["\'][^>]*content=["\']([^"\']{6,30})', re.I),
+    re.compile(r'itemprop=["\']birthDate["\'][^>]*>\s*([^<]{6,30})<', re.I),
+    re.compile(r'"birthDate"\s*:\s*"([^"]{6,30})"', re.I),
+]
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def tm_profile(url: str):
+    """(dob, citizenship, note) من صفحة بروفايل اللاعب. بيتكاش يوم كامل."""
+    html, status, err = tm_get(url)
+    if err:
+        return "", "", f"فشل: {err}"
+    if status != 200:
+        return "", "", f"HTTP {status}"
+
+    dob = ""
+    for pat in DOB_PATTERNS:
+        m = pat.search(html)
+        if m:
+            dob = normalize_dob(m.group(1))
+            if dob:
+                break
+
+    ctry = ""
+    cm = re.search(r"Citizenship|Staatsb", html, re.I)
+    if cm:
+        chunk = html[cm.start(): cm.start() + 500]
+        names = [
+            t for t in re.findall(r'title=["\']([A-Z][A-Za-z .\'&-]{2,30})["\']', chunk)
+            if not re.search(r"transfermarkt|imago|logo", t, re.I)
+        ]
+        seen, uniq = set(), []
+        for n in names:
+            if n not in seen:
+                seen.add(n)
+                uniq.append(n)
+        ctry = "|".join(uniq[:3])
+
+    return dob, ctry, "ok" if dob else "مفيش تاريخ في البروفايل"
+
+
+def tm_load(match_url: str, want_dob: bool, progress=None):
+    """
+    يرجّع (players, messages). كل لاعب بنفس شكل مخرج parse_flashscore
+    عشان باقي الأداة تشتغل من غير تعديل.
+    """
+    msgs = []
+    url = tm_match_url(match_url)
+    if not url:
+        return [], ["اللينك فاضي"]
+
+    msgs.append(f"بجيب: {url}")
+    html, status, err = tm_get(url)
+
+    if err:
+        return [], msgs + [f"❌ فشل الاتصال: {err}"]
+    if status == 403:
+        return [], msgs + [
+            "❌ ترانسفرماركت رجع 403 — حجب IP السيرفر. "
+            "استخدم طريقة اللصق بدل اللينك."
+        ]
+    if status != 200:
+        return [], msgs + [f"❌ الصفحة رجعت كود {status}"]
+
+    raw, note = tm_parse_lineup(html, url)
+    if note:
+        msgs.append("⚠️ " + note)
+    if not raw:
+        return [], msgs + [
+            "❌ ملقيتش لاعبين في الصفحة. اتأكد إن اللينك لماتش خلص "
+            "وتشكيلته منشورة."
+        ]
+
+    msgs.append(f"✅ {len(raw)} لاعب اتقروا من صفحة التشكيلة")
+
+    if want_dob:
+        for i, p in enumerate(raw):
+            dob, ctry, _note = tm_profile(p["profile"])
+            p["dob"] = dob
+            if not p["nationality"]:
+                p["nationality"] = ctry
+            if progress:
+                progress((i + 1) / len(raw),
+                         f"تواريخ الميلاد {i + 1}/{len(raw)}")
+            time.sleep(0.25)
+
+            # لو أول 4 كلهم فشلوا، بلاش نكمل على الفاضي
+            if i == 3 and not any(x["dob"] for x in raw[:4]):
+                msgs.append(
+                    "⚠️ أول 4 بروفايلات مجابوش تاريخ — وقفت. "
+                    f"({_note})"
+                )
+                break
+
+        ok = sum(1 for p in raw if p["dob"])
+        msgs.append(f"{'✅' if ok else '⚠️'} {ok} من {len(raw)} بتاريخ ميلاد")
+
+    players = [{
+        "shirt": p["shirt"],
+        "name": p["name"],
+        "dob": p["dob"],
+        "nationality": p["nationality"],
+        "fs_id": p["tm_id"],
+        "side": p["side"],
+    } for p in raw]
+
+    return players, msgs
+
+
+# ---------------------------------------------------------------------------
 # المطابقة
 # ---------------------------------------------------------------------------
 
@@ -468,27 +770,30 @@ st.caption(
     "وبعدين رقم القميص كآخر حل."
 )
 
-with st.expander("📋 إزاي تجيب التشكيلة", expanded=False):
+with st.expander("📋 طريقة الاستخدام", expanded=False):
     st.markdown(
         """
-**من ترانسفرماركت (الأفضل — بيجيب تاريخ الميلاد كمان):**
+1. الصق جدول الفريق من السيستم في الخانة الشمال.
+2. حط لينك ماتش ترانسفرماركت في الخانة اليمين — أي لينك للماتش
+   ينفع، الأداة بتحوّله لصفحة التشكيلة لوحدها.
+3. اختار فريقك (**HOME** صاحب الأرض / **AWAY** الضيف). مهمة دي،
+   لأن أرقام القمصان بتتكرر بين الفريقين.
+4. دوس **ابدأ المقارنة**.
 
-1. افتح صفحة الماتش واضغط تاب **LINE-UPS**.
-2. اسكرول لتحت لحد ما تشوف البدلاء والمدرب.
-3. `F12` ← تاب **Console**. لو كروم طلب، اكتب `allow pasting` واضغط Enter.
-4. الصق محتوى `transfermarkt-extract.js` واضغط Enter — الصندوق
-   هيشتغل لوحده.
-5. لما يخلص دوس **انسخ**، والصق هنا في الخانة اليمين.
+الأداة بتجيب رقم القميص، الاسم الكامل، تاريخ الميلاد، والجنسيات
+(كلها لو اللاعب عنده أكتر من واحدة).
 
-بيجيب: رقم القميص، الاسم الكامل، تاريخ الميلاد، الجنسيات (كلها لو
-اللاعب عنده أكتر من واحدة)، والفريق.
+**المطابقة بتمشي كده:** تاريخ الميلاد الأول (أقوى مفتاح)، بعدين
+الاسم بعد التطبيع، وبعدين رقم القميص كآخر حل. أي مطابقة بالرقم
+لوحده بتتعلّم ⚠️ لأنها مش موثوقة.
+
+**التواريخ بتتكاش يوم كامل**، فلو راجعت نفس الماتش تاني النتيجة
+بتيجي فوراً.
 
 ---
 
-**بسرعة بالماوس (بدون تاريخ ميلاد):** علّم على التشكيلة في أي موقع
-بالماوس، `Ctrl+C`، والصق هنا. هتجيب الأرقام والأسماء بس.
-
-عادي لو النص فيه الفريقين مع بعض — علّم على المربع اللي تحت.
+**لو ظهر خطأ 403:** ترانسفرماركت حجب IP السيرفر. حوّل على
+📋 لصق نص، وعلّم على التشكيلة في الصفحة بالماوس والصقها.
         """
     )
 
@@ -506,13 +811,42 @@ with col1:
     )
 
 with col2:
-    st.subheader("2. Flashscore")
-    fs_text = st.text_area(
-        "الصق التشكيلة:",
-        height=300,
-        placeholder="7Bockhorn H.\n5Muller T.\nSubstitutes\n"
-                    "35Baars M.\n11Chavez F.\n4Dzogovic E.",
+    st.subheader("2. ترانسفرماركت")
+
+    fetch_mode = st.radio(
+        "طريقة الجلب:",
+        ["🔗 لينك الماتش (تلقائي)", "📋 لصق نص"],
+        horizontal=True,
     )
+    use_url = fetch_mode.startswith("🔗")
+
+    tm_url, fs_text = "", ""
+
+    if use_url:
+        tm_url = st.text_input(
+            "لينك ماتش ترانسفرماركت:",
+            placeholder="https://www.transfermarkt.com/.../aufstellung/spielbericht/4940060",
+            help="أي لينك للماتش ينفع — الأداة بتحوّله لصفحة التشكيلة لوحدها.",
+        )
+        want_dob = st.checkbox(
+            "اجلب تواريخ الميلاد",
+            value=True,
+            help="بيفتح بروفايل كل لاعب. بيزود الوقت ~15 ثانية، "
+                 "وبيتكاش يوم كامل فالمرة التانية فورية.",
+        )
+        st.caption(
+            "لو رجع خطأ 403، يبقى ترانسفرماركت حجب IP السيرفر — "
+            "حوّل على 📋 لصق نص."
+        )
+    else:
+        fs_text = st.text_area(
+            "الصق التشكيلة:",
+            height=240,
+            placeholder="1\tMark Oxley\t1990-09-28\tEngland\tHOME\n"
+                        "24\tLewis Cass\t2000-02-27\tEngland\tHOME",
+        )
+        want_dob = False
+
     mixed_teams = st.checkbox(
         "النص فيه الفريقين مع بعض",
         value=True,
@@ -520,9 +854,10 @@ with col2:
              "يظهروا كأخطاء في الجدول الأساسي.",
     )
     side_choice = st.radio(
-        "فلترة بالفريق (تنفع مع مخرج السكريبت بس):",
-        ["ANY (كل اللي ملزوق)", "AWAY (الضيف)", "HOME (صاحب الأرض)"],
-        horizontal=False,
+        "الفريق اللي بتقارنه:",
+        ["ANY (الكل)", "HOME (صاحب الأرض)", "AWAY (الضيف)"],
+        horizontal=True,
+        help="مهم: أرقام القمصان بتتكرر بين الفريقين، فاختار فريقك.",
     )
 
 st.divider()
@@ -531,8 +866,11 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
     if not internal_text.strip():
         st.warning("⚠️ الصق جدول السيستم الداخلي الأول.")
         st.stop()
-    if not fs_text.strip():
-        st.warning("⚠️ الصق تشكيلة Flashscore في الخانة اليمين.")
+    if use_url and not tm_url.strip():
+        st.warning("⚠️ حط لينك ماتش ترانسفرماركت.")
+        st.stop()
+    if not use_url and not fs_text.strip():
+        st.warning("⚠️ الصق التشكيلة في الخانة اليمين.")
         st.stop()
 
     source_players = parse_internal(internal_text)
@@ -544,12 +882,44 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         st.stop()
 
     want_side = side_choice.split()[0]
-    fs_players = parse_flashscore(fs_text, want_side)
+
+    if use_url:
+        if not HAVE_BS4:
+            st.error(
+                "❌ مكتبة beautifulsoup4 ناقصة. ضيف `beautifulsoup4` "
+                "في requirements.txt واعمل redeploy."
+            )
+            st.stop()
+
+        bar = st.progress(0.0, "بجيب صفحة التشكيلة...")
+        fetched, msgs = tm_load(
+            tm_url, want_dob,
+            progress=lambda f, t: bar.progress(f, t),
+        )
+        bar.empty()
+
+        with st.expander("📡 تفاصيل الجلب", expanded=not fetched):
+            for m in msgs:
+                st.write(m)
+
+        if not fetched:
+            st.error(
+                "❌ الجلب فشل. شوف التفاصيل فوق. لو السبب 403، "
+                "حوّل على 📋 لصق نص."
+            )
+            st.stop()
+
+        fs_players = [
+            p for p in fetched
+            if want_side == "ANY" or p["side"] not in ("HOME", "AWAY")
+            or p["side"] == want_side
+        ]
+    else:
+        fs_players = parse_flashscore(fs_text, want_side)
+
     if not fs_players:
         st.error(
-            "❌ معرفتش أفكك نص Flashscore.\n\n"
-            "لو مستخدم السكريبت، تأكد إنك لزقت كل المخرج بالسطر الأول "
-            "اللي فيه #number. ولو الفريق المختار غلط، جرّب ANY."
+            "❌ مفيش لاعبين للمقارنة. لو فلترت بالفريق، جرّب ANY."
         )
         st.stop()
 
