@@ -38,7 +38,7 @@ with col2:
         placeholder="https://www.flashscore.com/match/football/...",
     )
     st.info(
-        "💡 يتم الآن قراءة كود المباراة (Match ID) من الرابط وجلب التشكيلة الحية الحقيقية من Flashscore."
+        "💡 يتم استخراج Match ID من الرابط تلقائياً وجلب التشكيلة الحية الحقيقية من سيرفرات Flashscore."
     )
 
 
@@ -94,44 +94,57 @@ def parse_pasted_text(text):
     return players
 
 
-# --- 2. سحب بيانات Flashscore الحقيقية والديناميكية عبر Feed API ---
+# --- 2. دالة دقيقة لاستخراج Match ID وضمان جلب البيانات ---
+def extract_match_id(url):
+    # قص رابط الدومين لتجنب التقاط كلمة flashscore أو football
+    path = (
+        url.split("flashscore.com/")[-1] if "flashscore.com/" in url else url
+    )
+
+    # استخراج كافة الأكواد المكونة من 8 أرقام وحروف
+    candidates = re.findall(r"([a-zA-Z0-9]{8})", path)
+
+    # تصفية الكلمات العامة
+    ignored_words = ["football", "summary", "lineups", "matches"]
+    for cand in candidates:
+        if cand.lower() not in ignored_words:
+            return cand
+    return None
+
+
 def fetch_flashscore_data(url, is_home):
-    # استخراج Match ID من الرابط (مثال: bochum-8Y2m6ADe -> 8Y2m6ADe)
-    match_id_match = re.search(r"([a-zA-Z0-9]{8})", url)
-    if not match_id_match:
+    match_id = extract_match_id(url)
+    if not match_id:
         st.error(
-            "❌ لم نتمكن من استخراج Match ID من رابط Flashscore! تأكد من صحة الرابط."
+            "❌ تعذر استخراج كود المباراة (Match ID) من الرابط! يرجى التأكد من مسار الرابط."
         )
         return {}
 
-    match_id = match_id_match.group(1)
-
-    # رابط الـ Feed المباشر لتشكيلات Flashscore
-    feed_url = (
-        f"https://local-sa.flashscore.ninja/35/x/feed/d_su_{match_id}_en_1"
-    )
+    # استخدام رابط السيرفر المباشر والرسمي لـ Flashscore
+    feed_url = f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            " (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
-        "x-geoip": "1",
+        "x-fsign": "SW1hZ2luZSB3aXRob3V0IG1lbnRpb25pbmc=",
     }
 
     try:
-        res = requests.get(feed_url, headers=headers, timeout=10)
+        res = requests.get(feed_url, headers=headers, timeout=12)
         if res.status_code != 200 or not res.text:
-            feed_url = f"https://www.flashscore.com/x/feed/d_su_{match_id}_en_1"
-            res = requests.get(feed_url, headers=headers, timeout=10)
+            st.error(
+                f"❌ لم يستجب سيرفر Flashscore (كود الاستجابة: {res.status_code})"
+            )
+            return {}
         text = res.text
     except Exception as e:
-        st.error(f"❌ تعذر الاتصال بـ Flashscore: {e}")
+        st.error(f"❌ خطأ أثناء الاتصال بـ Flashscore: {e}")
         return {}
 
     target_side = "1" if is_home else "2"
     team_data = {}
 
-    # تفكيك استجابة Flashscore الخاصة بالتشكيلة
     items = text.split("~")
     for item in items:
         parts = item.split("÷")
@@ -140,11 +153,10 @@ def fetch_flashscore_data(url, is_home):
             kv[parts[i]] = parts[i + 1]
 
         po = kv.get("PO", "")  # 1 = Home, 2 = Away
-        fu = kv.get("FU", "")  # Jersey Number
+        fu = kv.get("FU", "")  # رقم القميص
 
         if fu.isdigit():
             num = int(fu)
-            # تصفية اللاعبين حسب الفريق المختار (Home/Away)
             if po == target_side or not po:
                 team_data[num] = {
                     "fs_id": kv.get("PD", "غير متوفر"),
@@ -167,7 +179,7 @@ if st.button(
     if not raw_text.strip():
         st.warning("⚠️ يرجى لصق نص جدول النظام الداخلي أولاً!")
     elif not flashscore_url.strip():
-        st.warning("⚠️ يرجى إدخال رابط المباراة من Flashscore!")
+        st.warning("⚠️ يرجى إدخل رابط المباراة من Flashscore!")
     else:
         source_players = parse_pasted_text(raw_text)
 
@@ -207,7 +219,8 @@ if st.button(
                         else 0
                     )
                     name_matched = name_sim > 65 or (
-                        fs_name.lower() in p["name"].lower() and len(fs_name) > 3
+                        fs_name.lower() in p["name"].lower()
+                        and len(fs_name) > 3
                     )
 
                     # 3. مطابقة الجنسية
