@@ -1190,6 +1190,8 @@ with tc:
         "sofascore": "سوفا سكور",
         "zerozero": "زيرو زيرو",
         "soccerway": "سوكرواي",
+        "espn": "ESPN",
+        "tribuna": "تريبونا",
         "flashscore": "فلاش سكور",
     }.get(_auto_source, _auto_source or "المصدر")
 
