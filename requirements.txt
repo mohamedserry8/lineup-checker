@@ -2,4 +2,7 @@ streamlit
 pandas
 rapidfuzz
 beautifulsoup4
+requests
 cloudscraper
+gspread
+google-auth
