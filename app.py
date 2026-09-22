@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Lineup Checker -- مقارنة تشكيلة السيستم الداخلي بتشكيلة Flashscore
+Lineup Checker -- مقارنة تشكيلة السيستم الداخلي بتشكيلة Transfermarkt/Sofascore
 =================================================================
 
 النسخة دي مفيهاش أي اتصال بالإنترنت. بتقارن نصين ملزوقين:
   - يسار: جدول السيستم الداخلي
-  - يمين: مخرج سكريبت flashscore-extract.js (أو نسخ يدوي من الصفحة)
+  - يمين: مخرج سكريبت TM/Sofa-extract.js (أو نسخ يدوي من الصفحة)
 
 ليه؟ فييدات فلاش سكور بقت GraphQL بـ persisted queries، والهاش بتاعها
 بيتغير مع كل ديبلوي، فأي سكرابينج بيفصل كل أسبوعين. اللصق مش بيفصل أبداً.
@@ -1074,17 +1074,19 @@ with col2:
         )
         want_dob = False
 
-    mixed_teams = st.checkbox(
-        "النص فيه الفريقين مع بعض",
-        value=True,
-        help="لاعبين الفريق التاني هيتحطوا في قسم منفصل بدل ما "
-             "يظهروا كأخطاء في الجدول الأساسي.",
-    )
     side_choice = st.radio(
         "الفريق اللي بتقارنه:",
-        ["ANY (الكل)", "HOME (صاحب الأرض)", "AWAY (الضيف)"],
+        ["HOME (صاحب الأرض)", "AWAY (الضيف)", "ANY (الكل)"],
         horizontal=True,
-        help="مهم: أرقام القمصان بتتكرر بين الفريقين، فاختار فريقك.",
+        help="أرقام القمصان بتتكرر بين الفريقين، فاختار فريقك. "
+             "ANY تنفع بس لو النص فيه فريق واحد.",
+    )
+    ignore_extras = st.checkbox(
+        "اللاعبين الزيادة عند المصدر = الفريق التاني (متحسبهمش نواقص)",
+        value=False,
+        help="علّم عليها بس لو لزقت الفريقين مع بعض بالماوس واخترت "
+             "ANY. لو فلترت بـ HOME أو AWAY، سيبها فاضية — غير كده "
+             "اللاعبين الناقصين مش هيظهروا.",
     )
 
 st.divider()
@@ -1256,18 +1258,41 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
 
     pairs, only_src, only_fs = match_squads(source_players, fs_players)
 
-    # لما النص فيه الفريقين، اللاعبين الزيادة هما الفريق التاني --
-    # مش أخطاء، فبيروحوا قسم منفصل تحت.
-    df = build_report(pairs, only_src, [] if mixed_teams else only_fs)
+    # اللاعبين الزيادة عند المصدر: نواقص حقيقية ولا الفريق التاني؟
+    # لو فلترت بفريق والنص فيه بيانات الفريق، يبقى نواقص حقيقية --
+    # مفيش سبب يخليهم مخفيين.
+    has_side_info = any(p.get("side") in ("HOME", "AWAY") for p in fs_players)
+    filtered_by_side = want_side in ("HOME", "AWAY")
+    extras_are_other_team = ignore_extras and not (filtered_by_side and has_side_info)
+
+    if ignore_extras and filtered_by_side and has_side_info:
+        st.info(
+            "ℹ️ تجاهلت خيار «الفريق التاني» لأنك فلترت بفريق والنص فيه "
+            "بيانات الفرق — فأي لاعب زيادة عند المصدر هو نقص حقيقي."
+        )
+
+    df = build_report(pairs, only_src, [] if extras_are_other_team else only_fs)
 
     full = sum(1 for r in df["الحالة"] if r.startswith("✅"))
-    headline = (
-        f"📊 النتيجة — {full} تطابق كامل، {len(pairs) - full} محتاج مراجعة، "
-        f"{len(only_src)} عندك ومش عندهم"
-    )
-    if not mixed_teams:
-        headline += f"، {len(only_fs)} عندهم ومش عندك"
-    st.subheader(headline)
+    review = len(pairs) - full
+    n_missing_src = len(only_src)
+    n_missing_fs = 0 if extras_are_other_team else len(only_fs)
+
+    st.subheader("📊 النتيجة")
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("✅ تطابق كامل", full)
+    k2.metric("⚠️ محتاج مراجعة", review)
+    k3.metric("🚫 ناقص عند المصدر", n_missing_src,
+              help="لاعبين في سيستمك ومش لاقيلهم مقابل عند المصدر")
+    k4.metric("🚫 ناقص في سيستمك", n_missing_fs,
+              help="لاعبين عند المصدر ومش موجودين في جدولك")
+
+    if n_missing_src or n_missing_fs:
+        st.warning(
+            f"⚠️ فيه {n_missing_src + n_missing_fs} لاعب ملهم مقابل. "
+            "التفاصيل في قسم «اللاعبين الناقصين» تحت."
+        )
 
     def color_status(val):
         text = str(val)
@@ -1282,6 +1307,55 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         use_container_width=True,
         hide_index=True,
     )
+
+    # --- اللاعبين الناقصين ---
+    st.divider()
+    st.subheader("🚫 اللاعبين الناقصين")
+
+    ms1, ms2 = st.columns(2)
+
+    with ms1:
+        st.markdown(f"**ناقص عند المصدر ({n_missing_src})**")
+        st.caption("موجودين في سيستمك ومش لاقيلهم مقابل عند المصدر")
+        if only_src:
+            st.dataframe(
+                pd.DataFrame([{
+                    "رقم": p["number"],
+                    "الاسم": p["name"],
+                    "الميلاد": p["dob"] or "—",
+                    "الجنسية": p["nationality"] or "—",
+                    "ID داخلي": p["internal_id"],
+                    "النوع": p["type"],
+                } for p in only_src]),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.success("مفيش — كل لاعيبك لاقيناهم عند المصدر ✓")
+
+    with ms2:
+        st.markdown(f"**ناقص في سيستمك ({n_missing_fs})**")
+        st.caption("موجودين عند المصدر ومش موجودين في جدولك")
+        if only_fs and not extras_are_other_team:
+            st.dataframe(
+                pd.DataFrame([{
+                    "رقم": p["shirt"] if p["shirt"] is not None else "—",
+                    "الاسم": p["name"],
+                    "الميلاد": p["dob"] or "—",
+                    "الجنسية": p["nationality"] or "—",
+                    "ID المصدر": p["fs_id"],
+                    "الفريق": p["side"],
+                } for p in only_fs]),
+                use_container_width=True, hide_index=True,
+            )
+        elif only_fs and extras_are_other_team:
+            st.info(
+                f"{len(only_fs)} لاعب زيادة عند المصدر، بس انت علّمت إنهم "
+                "الفريق التاني فمحسبتهمش نواقص. القائمة في القسم المطوي تحت."
+            )
+        else:
+            st.success("مفيش — كل لاعيبهم موجودين عندك ✓")
+
+    st.divider()
 
     st.download_button(
         "⬇️ تحميل CSV",
@@ -1308,7 +1382,7 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         full,
         review,
         len(only_src),
-        len(only_fs) if not mixed_teams else 0,
+        n_missing_fs,
         details[:4000],
         source_name,
     ])
@@ -1330,10 +1404,9 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         if BLOCK_ON_LOG_FAILURE:
             st.stop()
 
-    if mixed_teams and only_fs:
+    if extras_are_other_team and only_fs:
         with st.expander(
-            f"👥 {len(only_fs)} لاعب في نص Flashscore ملهمش مقابل عندك "
-            "(على الأغلب الفريق التاني)"
+            f"👥 {len(only_fs)} لاعب زيادة عند المصدر (اعتبرتهم الفريق التاني)"
         ):
             st.caption(
                 "راجع القائمة دي بسرعة: لو لقيت فيها لاعب المفروض يكون "
