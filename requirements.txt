@@ -1,5 +1,4 @@
 streamlit
 pandas
-fuzzywuzzy
-python-Levenshtein
-curl_cffi
+rapidfuzz
+cloudscraper
