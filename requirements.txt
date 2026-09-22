@@ -1,0 +1,7 @@
+streamlit
+pandas
+pillow
+requests
+playwright
+fuzzywuzzy
+python-Levenshtein
