@@ -181,10 +181,58 @@ def normalize_dob(value) -> str:
     return ""
 
 
+# أكواد الدول ISO -- بعض المصادر بترجّع "CO" بدل "Colombia"
+ISO_CODES = {
+    "ar": "argentina", "arg": "argentina", "au": "australia", "aus": "australia",
+    "at": "austria", "aut": "austria", "be": "belgium", "bel": "belgium",
+    "br": "brazil", "bra": "brazil", "bg": "bulgaria", "bgr": "bulgaria",
+    "ca": "canada", "can": "canada", "cl": "chile", "chl": "chile",
+    "cn": "china", "chn": "china", "co": "colombia", "col": "colombia",
+    "cr": "costa rica", "cri": "costa rica", "hr": "croatia", "cro": "croatia",
+    "cz": "czechia", "cze": "czechia", "dk": "denmark", "den": "denmark",
+    "ec": "ecuador", "ecu": "ecuador", "eg": "egypt", "egy": "egypt",
+    "eng": "england", "sco": "scotland", "wal": "wales", "nir": "northern ireland",
+    "fr": "france", "fra": "france", "de": "germany", "ger": "germany",
+    "deu": "germany", "gh": "ghana", "gha": "ghana", "gr": "greece",
+    "grc": "greece", "hu": "hungary", "hun": "hungary", "is": "iceland",
+    "isl": "iceland", "ie": "ireland", "irl": "ireland", "it": "italy",
+    "ita": "italy", "ci": "ivory coast", "civ": "ivory coast",
+    "jm": "jamaica", "jam": "jamaica", "jp": "japan", "jpn": "japan",
+    "kr": "south korea", "kor": "south korea", "lu": "luxembourg",
+    "lux": "luxembourg", "mx": "mexico", "mex": "mexico", "ma": "morocco",
+    "mar": "morocco", "nl": "netherlands", "ned": "netherlands",
+    "nld": "netherlands", "ng": "nigeria", "nga": "nigeria", "no": "norway",
+    "nor": "norway", "py": "paraguay", "pry": "paraguay", "pe": "peru",
+    "per": "peru", "pl": "poland", "pol": "poland", "pt": "portugal",
+    "por": "portugal", "prt": "portugal", "ro": "romania", "rou": "romania",
+    "ru": "russia", "rus": "russia", "sn": "senegal", "sen": "senegal",
+    "rs": "serbia", "srb": "serbia", "sk": "slovakia", "svk": "slovakia",
+    "si": "slovenia", "svn": "slovenia", "za": "south africa",
+    "rsa": "south africa", "es": "spain", "esp": "spain", "se": "sweden",
+    "swe": "sweden", "ch": "switzerland", "sui": "switzerland",
+    "tg": "togo", "tog": "togo", "tn": "tunisia", "tun": "tunisia",
+    "tr": "turkey", "tur": "turkey", "ua": "ukraine", "ukr": "ukraine",
+    "uy": "uruguay", "uru": "uruguay", "us": "usa", "usa": "usa",
+    "ve": "venezuela", "ven": "venezuela", "cm": "cameroon", "cmr": "cameroon",
+    "dz": "algeria", "alg": "algeria", "cd": "dr congo", "cod": "dr congo",
+    "gn": "guinea", "gui": "guinea", "ml": "mali", "mli": "mali",
+    "bf": "burkina faso", "bfa": "burkina faso", "al": "albania",
+    "alb": "albania", "ba": "bosnia and herzegovina", "bih": "bosnia and herzegovina",
+    "mk": "north macedonia", "mkd": "north macedonia", "me": "montenegro",
+    "mne": "montenegro", "kv": "kosovo", "kos": "kosovo", "fi": "finland",
+    "fin": "finland", "il": "israel", "isr": "israel", "sa": "saudi arabia",
+    "ksa": "saudi arabia", "ae": "united arab emirates", "uae": "united arab emirates",
+    "bo": "bolivia", "bol": "bolivia", "pa": "panama", "pan": "panama",
+    "hn": "honduras", "hon": "honduras", "gt": "guatemala", "gua": "guatemala",
+    "skn": "st kitts and nevis", "nz": "new zealand", "nzl": "new zealand",
+}
+
+
 def country_keys(value: str) -> set:
     """
     يرجّع مجموعة الجنسيات المطبَّعة. اللاعب ممكن يكون له أكتر من
-    جنسية، مفصولين بـ | أو / أو فاصلة.
+    جنسية، مفصولين بـ | أو / أو فاصلة. بيفهم أكواد ISO كمان
+    (CO = Colombia) لأن بعض المصادر بترجّعها كود.
     """
     if not value:
         return set()
@@ -192,6 +240,9 @@ def country_keys(value: str) -> set:
     for part in re.split(r"[|/,;]", str(value)):
         norm = normalize_name(part).replace(".", "").strip()
         if not norm:
+            continue
+        if len(norm) in (2, 3) and norm in ISO_CODES:
+            out.add(ISO_CODES[norm])
             continue
         hit = next(
             (canon for canon, al in COUNTRY_ALIASES.items() if norm in al), norm
@@ -1138,6 +1189,7 @@ with tc:
         "transfermarkt": "ترانسفرماركت",
         "sofascore": "سوفا سكور",
         "zerozero": "زيرو زيرو",
+        "soccerway": "سوكرواي",
         "flashscore": "فلاش سكور",
     }.get(_auto_source, _auto_source or "المصدر")
 
