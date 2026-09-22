@@ -38,11 +38,12 @@ try:
 except ImportError:  # pragma: no cover
     HAVE_BS4 = False
 
+import requests
+
 try:
     import cloudscraper
     HAVE_SCRAPER = True
 except ImportError:  # pragma: no cover
-    import requests
     HAVE_SCRAPER = False
 
 
@@ -354,22 +355,55 @@ TM_HEADERS = {
 }
 
 
-def _session():
-    if HAVE_SCRAPER:
-        return cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "desktop": True}
-        )
-    return requests.Session()
+def _looks_like_lineup(html: str) -> bool:
+    """الصفحة الحقيقية فيها لينكات لاعبين. صفحة تحدي Cloudflare مفيهاش."""
+    return bool(html) and "/spieler/" in html
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def tm_get(url: str):
-    """يرجّع (html, status, error). النتيجة بتتكاش 15 دقيقة."""
+    """
+    يرجّع (html, status, error).
+
+    بيجرب مكتبتين -- بصمة الطلب بتفرق مع Cloudflare. لو الاتنين
+    رجعوا صفحة تحدي، بيرجع أطول رد عشان نشخّص منه.
+    """
+    attempts = []
+
+    if HAVE_SCRAPER:
+        try:
+            s = cloudscraper.create_scraper(
+                browser={"browser": "chrome", "platform": "windows", "desktop": True}
+            )
+            r = s.get(url, headers=TM_HEADERS, timeout=25)
+            attempts.append(("cloudscraper", r.text, r.status_code))
+        except Exception as exc:
+            attempts.append(("cloudscraper", "", f"خطأ: {exc}"))
+
     try:
-        res = _session().get(url, headers=TM_HEADERS, timeout=25)
-        return res.text, res.status_code, None
+        r = requests.get(url, headers=TM_HEADERS, timeout=25,
+                         allow_redirects=True)
+        attempts.append(("requests", r.text, r.status_code))
     except Exception as exc:
-        return "", None, str(exc)
+        attempts.append(("requests", "", f"خطأ: {exc}"))
+
+    # أي رد فيه لينكات لاعبين = نجاح، مهما كان الكود
+    for name, html, status in attempts:
+        if _looks_like_lineup(html):
+            return html, 200, None
+
+    if not attempts:
+        return "", None, "مفيش مكتبة جلب متاحة"
+
+    best = max(attempts, key=lambda a: len(a[1] or ""))
+    name, html, status = best
+    detail = "; ".join(
+        f"{n}: كود={s} طول={len(h or '')}" for n, h, s in attempts
+    )
+    return html, status, (
+        f"كل المحاولات رجعت صفحة مش فيها لاعبين ({detail}). "
+        "على الأغلب تحدي Cloudflare."
+    )
 
 
 def tm_match_url(raw: str) -> str:
@@ -573,13 +607,12 @@ def tm_load(match_url: str, want_dob: bool, progress=None):
     html, status, err = tm_get(url)
 
     if err:
-        return [], msgs + [f"❌ فشل الاتصال: {err}"]
-    if status == 403:
-        return [], msgs + [
-            "❌ ترانسفرماركت رجع 403 — حجب IP السيرفر. "
-            "استخدم طريقة اللصق بدل اللينك."
-        ]
-    if status != 200:
+        msgs.append(f"❌ {err}")
+        if html:
+            head = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html[:1200]))
+            msgs.append("عينة من الرد: " + head[:300])
+        return [], msgs
+    if status and status >= 400:
         return [], msgs + [f"❌ الصفحة رجعت كود {status}"]
 
     raw, note = tm_parse_lineup(html, url)
