@@ -2,6 +2,8 @@ streamlit
 pandas
 pillow
 requests
-playwright
+beautifulsoup4
+easyocr
+opencv-python-headless
 fuzzywuzzy
 python-Levenshtein
