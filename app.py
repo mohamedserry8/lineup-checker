@@ -73,8 +73,6 @@ COUNTRY_ALIASES = {
     "dr congo": {"dr congo", "congo dr", "democratic republic of congo", "cod"},
 }
 
-# لو السورس مسجل "United Kingdom" وترانسفرماركت مسجل "England"،
-# الاتنين مقبولين -- المجموعات دي بتعتبر بعضها متطابقة.
 COUNTRY_GROUPS = [
     {"united kingdom", "great britain", "gb", "uk",
      "england", "scotland", "wales", "northern ireland"},
@@ -86,7 +84,6 @@ COUNTRY_GROUPS = [
 # ---------------------------------------------------------------------------
 
 def strip_diacritics(text: str) -> str:
-    """Šimić -> Simic  ،  Chávez -> Chavez"""
     return "".join(
         ch for ch in unicodedata.normalize("NFKD", text)
         if not unicodedata.combining(ch)
@@ -104,7 +101,6 @@ def normalize_name(name: str) -> str:
 
 
 def name_tokens(name: str):
-    """يرجّع (الكلمات الكاملة، الحروف المختصرة)."""
     full, initials = [], []
     for tok in normalize_name(name).split():
         clean = tok.rstrip(".")
@@ -115,13 +111,6 @@ def name_tokens(name: str):
 
 
 def name_similarity(src_name: str, fs_name: str) -> int:
-    """
-    نسبة تشابه واعية بالاختصارات.
-
-    فلاش سكور بيكتب "Chávez Fischer F." والسورس عندك
-    "Felipe Marlon Chávez Fischer" -- المقارنة النصية العادية بتفشل،
-    فبنعتبر الحرف المختصر حرف أول لاسم من أسماء السورس.
-    """
     if not src_name or not fs_name:
         return 0
 
@@ -148,7 +137,6 @@ def name_similarity(src_name: str, fs_name: str) -> int:
 
 
 def normalize_dob(value) -> str:
-    """أي صيغة شائعة -> YYYY-MM-DD، أو '' لو فشل."""
     if value is None:
         return ""
     raw = str(value).strip()
@@ -181,7 +169,6 @@ def normalize_dob(value) -> str:
     return ""
 
 
-# أكواد الدول ISO -- بعض المصادر بترجّع "CO" بدل "Colombia"
 ISO_CODES = {
     "ar": "argentina", "arg": "argentina", "au": "australia", "aus": "australia",
     "at": "austria", "aut": "austria", "be": "belgium", "bel": "belgium",
@@ -229,11 +216,6 @@ ISO_CODES = {
 
 
 def country_keys(value: str) -> set:
-    """
-    يرجّع مجموعة الجنسيات المطبَّعة. اللاعب ممكن يكون له أكتر من
-    جنسية، مفصولين بـ | أو / أو فاصلة. بيفهم أكواد ISO كمان
-    (CO = Colombia) لأن بعض المصادر بترجّعها كود.
-    """
     if not value:
         return set()
     out = set()
@@ -252,11 +234,6 @@ def country_keys(value: str) -> set:
 
 
 def countries_agree(src_val: str, fs_val: str) -> str:
-    """
-    ✅ لو فيه أي جنسية مشتركة، ❌ لو مفيش، ➖ لو حد منهم فاضي.
-    اللاعب بجنسيتين على ترانسفرماركت لازم يتطابق لو السورس مسجل
-    واحدة منهم بس.
-    """
     a, b = country_keys(src_val), country_keys(fs_val)
     if not a or not b:
         return "➖"
@@ -316,13 +293,11 @@ def parse_internal(text: str):
 
 
 # ---------------------------------------------------------------------------
-# تفكيك نص Flashscore
+# تفكيك نص Flashscore / zerozero
 # ---------------------------------------------------------------------------
 
-# علامات زي (G) للحارس و (C) للكابتن -- بتتشال من الاسم
 MARKER_RE = re.compile(r"\(\s*(?:G|C|GK|VC)\s*\)", re.I)
 
-# سطور عناوين الأقسام -- بتتجاهل
 SECTION_WORDS = (
     "substitutes", "subs", "bench", "starting", "lineup", "formation",
     "coach", "manager", "missing players", "injuries", "suspended",
@@ -330,15 +305,6 @@ SECTION_WORDS = (
 
 
 def parse_flashscore(text: str, want_side: str):
-    """
-    بيقبل تلات صيغ:
-
-    أ) مخرج السكريبت (TSV: number, name, dob, country, side, fs_id)
-    ب) نسخ مباشر من الصفحة بالرقم ملزوق في الاسم: "7Bockhorn H."
-    ج) اسم بدون رقم: "Reimann D."
-
-    want_side: "HOME" أو "AWAY" أو "ANY"
-    """
     players = []
 
     for raw in text.strip().splitlines():
@@ -348,7 +314,8 @@ def parse_flashscore(text: str, want_side: str):
 
         if "\t" in line:
             cols = [c.strip() for c in line.split("\t")]
-            cols += [""] * (6 - len(cols))
+            cols += [""] * (7 - len(cols))
+            # دعم عمود zz_id الإضافي من zerozero: number, name, dob, country, side, zz_id, role
             number, name, dob, country, side, fs_id = cols[:6]
         else:
             low = line.lower()
@@ -359,7 +326,6 @@ def parse_flashscore(text: str, want_side: str):
             if not cleaned or not re.search(r"[A-Za-zÀ-ÿ]", cleaned):
                 continue
 
-            # الرقم ملزوق أو مفصول أو مش موجود خالص
             m = re.match(r"^(\d{1,3})\s*(.+)$", cleaned)
             if m:
                 number, rest = m.group(1), m.group(2).strip()
@@ -407,18 +373,11 @@ TM_HEADERS = {
 
 
 def _looks_like_lineup(html: str) -> bool:
-    """الصفحة الحقيقية فيها لينكات لاعبين. صفحة تحدي Cloudflare مفيهاش."""
     return bool(html) and "/spieler/" in html
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def tm_get(url: str):
-    """
-    يرجّع (html, status, error).
-
-    بيجرب مكتبتين -- بصمة الطلب بتفرق مع Cloudflare. لو الاتنين
-    رجعوا صفحة تحدي، بيرجع أطول رد عشان نشخّص منه.
-    """
     attempts = []
 
     if HAVE_SCRAPER:
@@ -438,7 +397,6 @@ def tm_get(url: str):
     except Exception as exc:
         attempts.append(("requests", "", f"خطأ: {exc}"))
 
-    # أي رد فيه لينكات لاعبين = نجاح، مهما كان الكود
     for name, html, status in attempts:
         if _looks_like_lineup(html):
             return html, 200, None
@@ -458,15 +416,10 @@ def tm_get(url: str):
 
 
 def tm_match_url(raw: str) -> str:
-    """
-    يحوّل أي لينك ماتش لصفحة التشكيلة.
-    /spielbericht/index/spielbericht/123  ->  /aufstellung/spielbericht/123
-    """
     raw = raw.strip()
     if not raw:
         return ""
     if not raw.startswith("http"):
-        # لينك ملزوق بدون https:// -- بدومين أو بمسار بس
         if re.match(r"(www\.)?transfermarkt\.", raw, re.I):
             raw = "https://" + raw
         else:
@@ -485,21 +438,11 @@ def tm_match_url(raw: str) -> str:
 
 
 def tm_parse_lineup(html: str, base_url: str):
-    """
-    يطلّع اللاعبين من صفحة التشكيلة.
-
-    الشكل اللي بنعتمد عليه (متأكدين منه من الصفحة الحقيقية):
-      <a title="Mark Oxley" href="/mark-oxley/leistungsdatendetails/spieler/67232/...">
-      <a href="/mark-oxley/profil/spieler/67232"><img title="Mark Oxley" ...>
-    فالمشترك هو /spieler/{id}. والفريق بيتحدد من لينك النادي
-    (/startseite/verein/{id}) اللي في نفس الصندوق.
-    """
     if not HAVE_BS4:
         return [], "مكتبة beautifulsoup4 مش متثبتة"
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # الفريقين من لينك الماتش: {home}_{away}
     slug = urlparse(base_url).path.lstrip("/").split("/")[0]
     home_slug, _, away_slug = slug.partition("_")
 
@@ -520,7 +463,6 @@ def tm_parse_lineup(html: str, base_url: str):
         if len(name) < 2:
             continue
 
-        # الصندوق = أقرب أب فيه لينك نادي
         club = ""
         node = a
         for _ in range(8):
@@ -532,7 +474,6 @@ def tm_parse_lineup(html: str, base_url: str):
                 club = (link.get("href") or "").lstrip("/").split("/")[0]
                 break
 
-        # الجنسيات من أعلام نفس الصف
         countries, row = [], a
         for _ in range(6):
             row = row.parent
@@ -546,7 +487,6 @@ def tm_parse_lineup(html: str, base_url: str):
             if countries:
                 break
 
-        # العمر ورقم القميص من نص الصف
         age, shirt = "", None
         row = a
         for _ in range(6):
@@ -611,7 +551,6 @@ DOB_PATTERNS = [
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def tm_profile(url: str):
-    """(dob, citizenship, note) من صفحة بروفايل اللاعب. بيتكاش يوم كامل."""
     html, status, err = tm_get(url)
     if err:
         return "", "", f"فشل: {err}"
@@ -645,10 +584,6 @@ def tm_profile(url: str):
 
 
 def tm_load(match_url: str, want_dob: bool, progress=None):
-    """
-    يرجّع (players, messages). كل لاعب بنفس شكل مخرج parse_flashscore
-    عشان باقي الأداة تشتغل من غير تعديل.
-    """
     msgs = []
     url = tm_match_url(match_url)
     if not url:
@@ -688,7 +623,6 @@ def tm_load(match_url: str, want_dob: bool, progress=None):
                          f"تواريخ الميلاد {i + 1}/{len(raw)}")
             time.sleep(0.25)
 
-            # لو أول 4 كلهم فشلوا، بلاش نكمل على الفاضي
             if i == 3 and not any(x["dob"] for x in raw[:4]):
                 msgs.append(
                     "⚠️ أول 4 بروفايلات مجابوش تاريخ — وقفت. "
@@ -716,10 +650,6 @@ def tm_load(match_url: str, want_dob: bool, progress=None):
 # ---------------------------------------------------------------------------
 
 def parse_meta(text: str) -> dict:
-    """
-    يقرا سطور #key=value اللي اليوزرسكريبت بيحطها في أول المخرج.
-    مثال: #match_id=4940060
-    """
     meta = {}
     for line in text.strip().splitlines()[:12]:
         line = line.strip()
@@ -736,8 +666,6 @@ def parse_meta(text: str) -> dict:
 # تسجيل المراجعات في جوجل شيت
 # ---------------------------------------------------------------------------
 
-# لو خليتها True، المقارنة بتتوقف لو التسجيل فشل.
-# False = المقارنة تكمل بس بتحذير أحمر إن التسجيل فشل.
 BLOCK_ON_LOG_FAILURE = False
 
 SHEET_HEADER = [
@@ -762,16 +690,6 @@ def now_str() -> str:
 
 @st.cache_resource(show_spinner=False)
 def _sheet():
-    """
-    يرجّع (worksheet, error). محتاج في st.secrets:
-
-      sheet_id = "..."
-      [gcp_service_account]
-      type = "service_account"
-      ... باقي مفاتيح ملف الـ JSON ...
-
-    التفاصيل في SETUP-GOOGLE-SHEET.md
-    """
     try:
         import gspread
         from google.oauth2.service_account import Credentials
@@ -801,7 +719,6 @@ def _sheet():
             ws = book.add_worksheet(title=tab_name, rows=2000,
                                     cols=len(SHEET_HEADER))
 
-        # نحط العناوين لو الشيت فاضية، وننبّه لو قديمة
         try:
             first = ws.row_values(1)
             if not first:
@@ -822,22 +739,17 @@ def _sheet():
 
 
 def log_review(row: list):
-    """يرجّع (نجح؟, رسالة الخطأ)."""
     ws, err = _sheet()
     if ws is None:
         return False, err
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
-        return True, err   # err ممكن يكون تحذير عناوين بس
+        return True, err
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
 
 
 def mismatch_details(df: pd.DataFrame) -> str:
-    """
-    يلخّص الاختلافات في سطر واحد للتسجيل.
-    مثال: "Tachie: رقم 29≠7 | Heber: جنسية Germany≠Austria"
-    """
     out = []
     for _, r in df.iterrows():
         state = str(r["الحالة"])
@@ -874,7 +786,6 @@ def mismatch_details(df: pd.DataFrame) -> str:
 # ---------------------------------------------------------------------------
 
 def match_squads(source, flashscore):
-    """يرجّع (أزواج متطابقة، اللي عندك بس، اللي عندهم بس)."""
     pairs = []
     src_left, fs_left = list(source), list(flashscore)
 
@@ -934,17 +845,37 @@ def build_report(pairs, only_source, only_fs):
 
         nat_state = countries_agree(src["nationality"], fs["nationality"])
 
+        # -------------------------------------------------------
+        # منطق الحالة المُحدَّث:
+        # لو المطابقة اتعملت بتاريخ الميلاد أو الاسم (مش بالرقم لوحده)،
+        # الرقم المختلف يبقى تحذير خفيف "رقم مختلف" مش error كامل.
+        # السبب: زيرو زيرو وترانسفرماركت أحياناً بيخزنوا رقم غلط للاعب،
+        # وده مش مشكلة في هوية اللاعب نفسه.
+        # -------------------------------------------------------
+        matched_by_strong_key = not method.startswith("رقم القميص")
+
         if method.startswith("رقم القميص"):
+            # مطابقة بالرقم لوحده = دايماً ضعيفة
             status = "⚠️ مطابقة ضعيفة — راجعه يدوي"
-        elif "❌" in (dob_state, nat_state) or not name_ok or not num_ok:
+        elif dob_state == "❌":
+            # تاريخ ميلاد مختلف = مشكلة حقيقية
             status = "⚠️ تطابق ناقص (اختلاف بيانات)"
+        elif nat_state == "❌":
+            # جنسية مختلفة = مشكلة حقيقية
+            status = "⚠️ تطابق ناقص (اختلاف بيانات)"
+        elif not name_ok:
+            # اسم مش متطابق = مشكلة
+            status = "⚠️ تطابق ناقص (اختلاف بيانات)"
+        elif not num_ok and matched_by_strong_key:
+            # ✅ الاسم/DOB متطابقين، بس الرقم مختلف في المصدر = تحذير خفيف
+            status = "🔢 رقم مختلف في المصدر"
         else:
             status = "✅ تطابق كامل"
 
         rows.append({
             "رقم السورس": src["number"],
             "رقم Flashscore": fs["shirt"] if fs["shirt"] is not None else "—",
-            "تطابق الرقم": "✅" if num_ok else "❌",
+            "تطابق الرقم": "✅" if num_ok else ("🔢" if matched_by_strong_key else "❌"),
             "اسم السورس": src["name"],
             "اسم Flashscore": fs["name"],
             "تشابه الاسم %": score,
@@ -1047,8 +978,7 @@ with st.expander("📋 طريقة الاستخدام", expanded=False):
 (بيفهم الاختصارات وبيشيل التشكيل)، وبعدين رقم القميص كآخر حل.
 أي مطابقة بالرقم لوحده بتتعلّم ⚠️ لأنها مش موثوقة.
 
-**ملحوظة للمراجعة:** ترانسفرماركت مصدر بشري ومش معصوم. أي اختلاف
-معناه "راجع الحالة دي" مش "بياناتك غلط".
+**ملحوظة:** 🔢 رقم مختلف في المصدر = اللاعب اتعرف بالاسم أو تاريخ الميلاد بس المصدر عنده رقم قميصه غلط. ده مش خطأ في هوية اللاعب.
         """
     )
 
@@ -1144,9 +1074,6 @@ st.divider()
 
 st.divider()
 
-# --- بيانات الماتش للتسجيل ---
-# لازم تكون برة بلوك الزرار: في Streamlit أي خانة بتتعمل جوه البلوك
-# قيمتها بترجع فاضية في نفس الجولة، فالتسجيل كان بياخد قيمة فاضية.
 _meta = parse_meta(fs_text) if (not use_url and fs_text) else {}
 
 _auto_id = _meta.get("match_id", "")
@@ -1314,9 +1241,6 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
 
     pairs, only_src, only_fs = match_squads(source_players, fs_players)
 
-    # اللاعبين الزيادة عند المصدر: نواقص حقيقية ولا الفريق التاني؟
-    # لو فلترت بفريق والنص فيه بيانات الفريق، يبقى نواقص حقيقية --
-    # مفيش سبب يخليهم مخفيين.
     has_side_info = any(p.get("side") in ("HOME", "AWAY") for p in fs_players)
     filtered_by_side = want_side in ("HOME", "AWAY")
     extras_are_other_team = ignore_extras and not (filtered_by_side and has_side_info)
@@ -1330,18 +1254,21 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
     df = build_report(pairs, only_src, [] if extras_are_other_team else only_fs)
 
     full = sum(1 for r in df["الحالة"] if r.startswith("✅"))
-    review = len(pairs) - full
+    wrong_num = sum(1 for r in df["الحالة"] if r.startswith("🔢"))
+    review = sum(1 for r in df["الحالة"] if r.startswith("⚠️"))
     n_missing_src = len(only_src)
     n_missing_fs = 0 if extras_are_other_team else len(only_fs)
 
     st.subheader("📊 النتيجة")
 
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("✅ تطابق كامل", full)
-    k2.metric("⚠️ محتاج مراجعة", review)
-    k3.metric("🚫 ناقص عند المصدر", n_missing_src,
+    k2.metric("🔢 رقم مختلف في المصدر", wrong_num,
+              help="اللاعب اتعرف بالاسم/DOB بس رقمه في المصدر غلط — مش خطأ في الهوية")
+    k3.metric("⚠️ محتاج مراجعة", review)
+    k4.metric("🚫 ناقص عند المصدر", n_missing_src,
               help="لاعبين في سيستمك ومش لاقيلهم مقابل عند المصدر")
-    k4.metric("🚫 ناقص في سيستمك", n_missing_fs,
+    k5.metric("🚫 ناقص في سيستمك", n_missing_fs,
               help="لاعبين عند المصدر ومش موجودين في جدولك")
 
     if n_missing_src or n_missing_fs:
@@ -1354,6 +1281,9 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         text = str(val)
         if "✅" in text:
             return "background-color: #1e4620; color: white;"
+        if "🔢" in text:
+            # أزرق خفيف — مش error، بس للتنبيه
+            return "background-color: #1a3a5c; color: #aad4f5;"
         if "⚠️" in text:
             return "background-color: #856404; color: white;"
         return "background-color: #721c24; color: white;"
@@ -1421,7 +1351,6 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
     )
 
     # --- التسجيل في جوجل شيت ---
-    review = len(pairs) - full
     details = mismatch_details(df)
 
     ok_log, log_err = log_review([
@@ -1478,6 +1407,5 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
                     }
                     for p in only_fs
                 ]),
-                use_container_width=True,
-                hide_index=True,
+                use_container_width=True, hide_index=True,
             )
