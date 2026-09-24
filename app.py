@@ -2,20 +2,6 @@
 """
 Lineup Checker -- مقارنة تشكيلة السيستم الداخلي بتشكيلة Flashscore
 =================================================================
-
-النسخة دي مفيهاش أي اتصال بالإنترنت. بتقارن نصين ملزوقين:
-  - يسار: جدول السيستم الداخلي
-  - يمين: مخرج سكريبت flashscore-extract.js (أو نسخ يدوي من الصفحة)
-
-ليه؟ فييدات فلاش سكور بقت GraphQL بـ persisted queries، والهاش بتاعها
-بيتغير مع كل ديبلوي، فأي سكرابينج بيفصل كل أسبوعين. اللصق مش بيفصل أبداً.
-
-المطابقة بتمشي بالترتيب ده:
-  1. تاريخ الميلاد (أقوى مفتاح)
-  2. الاسم بعد التطبيع (شيل التشكيل، وفهم الاختصارات زي "Kruth N.")
-  3. رقم القميص لوحده -- وبتتعلّم كمطابقة ضعيفة محتاجة مراجعة
-
-التشغيل: streamlit run app.py
 """
 
 import re
@@ -29,13 +15,13 @@ import streamlit as st
 
 try:
     from rapidfuzz import fuzz
-except ImportError:  # pragma: no cover
+except ImportError:
     from fuzzywuzzy import fuzz
 
 try:
     from bs4 import BeautifulSoup
     HAVE_BS4 = True
-except ImportError:  # pragma: no cover
+except ImportError:
     HAVE_BS4 = False
 
 import requests
@@ -43,7 +29,7 @@ import requests
 try:
     import cloudscraper
     HAVE_SCRAPER = True
-except ImportError:  # pragma: no cover
+except ImportError:
     HAVE_SCRAPER = False
 
 
@@ -287,7 +273,7 @@ def parse_internal(text: str):
             "name": name.strip(),
             "dob": normalize_dob(dob),
             "nationality": nat.strip(),
-            "type": "أساسي" if section == "Started" else "بديل",
+            "type": "Started" if section == "Started" else "Bench",
         })
     return players
 
@@ -315,7 +301,6 @@ def parse_flashscore(text: str, want_side: str):
         if "\t" in line:
             cols = [c.strip() for c in line.split("\t")]
             cols += [""] * (7 - len(cols))
-            # دعم عمود zz_id الإضافي من zerozero: number, name, dob, country, side, zz_id, role
             number, name, dob, country, side, fs_id = cols[:6]
         else:
             low = line.lower()
@@ -388,30 +373,30 @@ def tm_get(url: str):
             r = s.get(url, headers=TM_HEADERS, timeout=25)
             attempts.append(("cloudscraper", r.text, r.status_code))
         except Exception as exc:
-            attempts.append(("cloudscraper", "", f"خطأ: {exc}"))
+            attempts.append(("cloudscraper", "", f"Error: {exc}"))
 
     try:
         r = requests.get(url, headers=TM_HEADERS, timeout=25,
                          allow_redirects=True)
         attempts.append(("requests", r.text, r.status_code))
     except Exception as exc:
-        attempts.append(("requests", "", f"خطأ: {exc}"))
+        attempts.append(("requests", "", f"Error: {exc}"))
 
     for name, html, status in attempts:
         if _looks_like_lineup(html):
             return html, 200, None
 
     if not attempts:
-        return "", None, "مفيش مكتبة جلب متاحة"
+        return "", None, "No fetch library available"
 
     best = max(attempts, key=lambda a: len(a[1] or ""))
     name, html, status = best
     detail = "; ".join(
-        f"{n}: كود={s} طول={len(h or '')}" for n, h, s in attempts
+        f"{n}: code={s} len={len(h or '')}" for n, h, s in attempts
     )
     return html, status, (
-        f"كل المحاولات رجعت صفحة مش فيها لاعبين ({detail}). "
-        "على الأغلب تحدي Cloudflare."
+        f"All attempts returned a page without players ({detail}). "
+        "Likely a Cloudflare challenge."
     )
 
 
@@ -439,7 +424,7 @@ def tm_match_url(raw: str) -> str:
 
 def tm_parse_lineup(html: str, base_url: str):
     if not HAVE_BS4:
-        return [], "مكتبة beautifulsoup4 مش متثبتة"
+        return [], "beautifulsoup4 library not installed"
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -531,7 +516,7 @@ def tm_parse_lineup(html: str, base_url: str):
     players = list(by_id.values())
     note = ""
     if players and all(p["side"] == "UNKNOWN" for p in players):
-        note = "معرفتش أحدد الفريقين من لينكات الأندية"
+        note = "Could not determine teams from club links"
     return players, note
 
 
@@ -553,7 +538,7 @@ DOB_PATTERNS = [
 def tm_profile(url: str):
     html, status, err = tm_get(url)
     if err:
-        return "", "", f"فشل: {err}"
+        return "", "", f"Failed: {err}"
     if status != 200:
         return "", "", f"HTTP {status}"
 
@@ -580,37 +565,37 @@ def tm_profile(url: str):
                 uniq.append(n)
         ctry = "|".join(uniq[:3])
 
-    return dob, ctry, "ok" if dob else "مفيش تاريخ في البروفايل"
+    return dob, ctry, "ok" if dob else "No DOB found in profile"
 
 
 def tm_load(match_url: str, want_dob: bool, progress=None):
     msgs = []
     url = tm_match_url(match_url)
     if not url:
-        return [], ["اللينك فاضي"]
+        return [], ["URL is empty"]
 
-    msgs.append(f"بجيب: {url}")
+    msgs.append(f"Fetching: {url}")
     html, status, err = tm_get(url)
 
     if err:
         msgs.append(f"❌ {err}")
         if html:
             head = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html[:1200]))
-            msgs.append("عينة من الرد: " + head[:300])
+            msgs.append("Response sample: " + head[:300])
         return [], msgs
     if status and status >= 400:
-        return [], msgs + [f"❌ الصفحة رجعت كود {status}"]
+        return [], msgs + [f"❌ Page returned status {status}"]
 
     raw, note = tm_parse_lineup(html, url)
     if note:
         msgs.append("⚠️ " + note)
     if not raw:
         return [], msgs + [
-            "❌ ملقيتش لاعبين في الصفحة. اتأكد إن اللينك لماتش خلص "
-            "وتشكيلته منشورة."
+            "❌ No players found on page. Make sure the link points to a finished "
+            "match with a published lineup."
         ]
 
-    msgs.append(f"✅ {len(raw)} لاعب اتقروا من صفحة التشكيلة")
+    msgs.append(f"✅ {len(raw)} players read from lineup page")
 
     if want_dob:
         for i, p in enumerate(raw):
@@ -620,18 +605,17 @@ def tm_load(match_url: str, want_dob: bool, progress=None):
                 p["nationality"] = ctry
             if progress:
                 progress((i + 1) / len(raw),
-                         f"تواريخ الميلاد {i + 1}/{len(raw)}")
+                         f"Fetching DOBs {i + 1}/{len(raw)}")
             time.sleep(0.25)
 
             if i == 3 and not any(x["dob"] for x in raw[:4]):
                 msgs.append(
-                    "⚠️ أول 4 بروفايلات مجابوش تاريخ — وقفت. "
-                    f"({_note})"
+                    f"⚠️ First 4 profiles returned no DOB — stopped. ({_note})"
                 )
                 break
 
         ok = sum(1 for p in raw if p["dob"])
-        msgs.append(f"{'✅' if ok else '⚠️'} {ok} من {len(raw)} بتاريخ ميلاد")
+        msgs.append(f"{'✅' if ok else '⚠️'} {ok} of {len(raw)} with DOB")
 
     players = [{
         "shirt": p["shirt"],
@@ -669,12 +653,12 @@ def parse_meta(text: str) -> dict:
 BLOCK_ON_LOG_FAILURE = False
 
 SHEET_HEADER = [
-    "الوقت", "الإيميل",
-    "Match ID (السيستم)", "اسم الماتش (السيستم)",
-    "Match ID (المصدر)", "اسم الماتش (المصدر)",
-    "لينك الماتش", "الفريق",
-    "لاعبين السيستم", "لاعبين المصدر", "تطابق كامل", "محتاج مراجعة",
-    "عندنا ومش عندهم", "عندهم ومش عندنا", "تفاصيل الاختلاف", "المصدر",
+    "Timestamp", "Email",
+    "Match ID (Gatekeeper)", "Match Name (Gatekeeper)",
+    "Match ID (Source)", "Match Name (Source)",
+    "Match Link", "Team",
+    "Gatekeeper Players", "Online Players", "Exact Match", "Needs Review",
+    "Missing at Source", "Missing in Gatekeeper", "Diff Details", "Source",
 ]
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
@@ -694,13 +678,13 @@ def _sheet():
         import gspread
         from google.oauth2.service_account import Credentials
     except ImportError:
-        return None, "مكتبات gspread / google-auth ناقصة في requirements.txt"
+        return None, "gspread / google-auth libraries missing in requirements.txt"
 
     try:
         if "gcp_service_account" not in st.secrets:
-            return None, "مفيش gcp_service_account في إعدادات الـ secrets"
+            return None, "No gcp_service_account in secrets settings"
         if "sheet_id" not in st.secrets:
-            return None, "مفيش sheet_id في إعدادات الـ secrets"
+            return None, "No sheet_id in secrets settings"
 
         creds = Credentials.from_service_account_info(
             dict(st.secrets["gcp_service_account"]),
@@ -725,10 +709,9 @@ def _sheet():
                 ws.update("A1", [SHEET_HEADER])
             elif first != SHEET_HEADER:
                 return ws, (
-                    f"⚠️ عناوين الشيت قديمة ({len(first)} عمود بدل "
-                    f"{len(SHEET_HEADER)}). التسجيل شغال بس الأعمدة "
-                    "ممكن تبقى مش في مكانها. صحّح السطر الأول في الشيت "
-                    "أو اعمل تاب جديد فاضي."
+                    f"⚠️ Sheet headers are outdated ({len(first)} columns instead of "
+                    f"{len(SHEET_HEADER)}). Logging is active but columns may be misaligned. "
+                    "Fix the first row in the sheet or create a new empty tab."
                 )
         except Exception:
             pass
@@ -752,33 +735,33 @@ def log_review(row: list):
 def mismatch_details(df: pd.DataFrame) -> str:
     out = []
     for _, r in df.iterrows():
-        state = str(r["الحالة"])
+        state = str(r["Status"])
         if state.startswith("✅"):
             continue
 
-        name = r["اسم السورس"]
-        if "— غير موجود —" in str(name):
-            out.append(f"{r['اسم Flashscore']}: عندهم ومش عندنا")
+        name = r["Gatekeeper Name"]
+        if "— Not Found —" in str(name):
+            out.append(f"{r['Online Source Name']}: in source only")
             continue
-        if "— غير موجود —" in str(r["اسم Flashscore"]):
-            out.append(f"{name}: عندنا ومش عندهم")
+        if "— Not Found —" in str(r["Online Source Name"]):
+            out.append(f"{name}: in gatekeeper only")
             continue
 
         bits = []
-        if r["تطابق الرقم"] == "❌":
-            bits.append(f"رقم {r['رقم السورس']}≠{r['رقم Flashscore']}")
-        if r["تطابق الميلاد"] == "❌":
-            bits.append(f"ميلاد {r['ميلاد السورس']}≠{r['ميلاد Flashscore']}")
-        if r["تطابق الجنسية"] == "❌":
-            bits.append(f"جنسية {r['جنسية السورس']}≠{r['جنسية Flashscore']}")
-        if int(r["تشابه الاسم %"]) < NAME_MATCH_THRESHOLD:
-            bits.append(f"اسم {name}≠{r['اسم Flashscore']}")
-        if "رقم القميص" in str(r["طريقة المطابقة"]):
-            bits.append("اتطابق بالرقم لوحده")
+        if r["Shirt Match"] == "❌":
+            bits.append(f"shirt {r['Gatekeeper Shirt']}≠{r['Online Source Shirt']}")
+        if r["DOB Match"] == "❌":
+            bits.append(f"dob {r['Gatekeeper DOB']}≠{r['Online Source DOB']}")
+        if r["Nationality Match"] == "❌":
+            bits.append(f"nat {r['Gatekeeper Nationality']}≠{r['Online Source Nationality']}")
+        if int(r["Name Similarity %"]) < NAME_MATCH_THRESHOLD:
+            bits.append(f"name {name}≠{r['Online Source Name']}")
+        if "Shirt only" in str(r["Match Method"]):
+            bits.append("matched by shirt only")
 
         out.append(f"{name}: " + (", ".join(bits) if bits else state))
 
-    return " | ".join(out) if out else "مفيش اختلافات"
+    return " | ".join(out) if out else "No differences"
 
 
 # ---------------------------------------------------------------------------
@@ -802,7 +785,7 @@ def match_squads(source, flashscore):
                 reverse=True,
             )
         best = cands[0]
-        pairs.append((src, best, "تاريخ الميلاد", 100))
+        pairs.append((src, best, "Date of Birth", 100))
         src_left.remove(src)
         fs_left.remove(best)
 
@@ -815,7 +798,7 @@ def match_squads(source, flashscore):
         )
         if scored and scored[0][0] >= NAME_MATCH_THRESHOLD:
             score, best = scored[0]
-            pairs.append((src, best, "الاسم", score))
+            pairs.append((src, best, "Name", score))
             src_left.remove(src)
             fs_left.remove(best)
 
@@ -823,14 +806,14 @@ def match_squads(source, flashscore):
     for src in list(src_left):
         best = next((f for f in fs_left if f["shirt"] == src["number"]), None)
         if best is not None:
-            pairs.append((src, best, "رقم القميص فقط ⚠", 40))
+            pairs.append((src, best, "Shirt only ⚠", 40))
             src_left.remove(src)
             fs_left.remove(best)
 
     return pairs, src_left, fs_left
 
 
-def build_report(pairs, only_source, only_fs):
+def build_report(pairs, only_source, only_fs, source_label="Online Source"):
     rows = []
 
     for src, fs, method, _conf in pairs:
@@ -845,88 +828,76 @@ def build_report(pairs, only_source, only_fs):
 
         nat_state = countries_agree(src["nationality"], fs["nationality"])
 
-        # -------------------------------------------------------
-        # منطق الحالة المُحدَّث:
-        # لو المطابقة اتعملت بتاريخ الميلاد أو الاسم (مش بالرقم لوحده)،
-        # الرقم المختلف يبقى تحذير خفيف "رقم مختلف" مش error كامل.
-        # السبب: زيرو زيرو وترانسفرماركت أحياناً بيخزنوا رقم غلط للاعب،
-        # وده مش مشكلة في هوية اللاعب نفسه.
-        # -------------------------------------------------------
-        matched_by_strong_key = not method.startswith("رقم القميص")
+        matched_by_strong_key = not method.startswith("Shirt only")
 
-        if method.startswith("رقم القميص"):
-            # مطابقة بالرقم لوحده = دايماً ضعيفة
-            status = "⚠️ مطابقة ضعيفة — راجعه يدوي"
+        if method.startswith("Shirt only"):
+            status = "⚠️ Weak match — review manually"
         elif dob_state == "❌":
-            # تاريخ ميلاد مختلف = مشكلة حقيقية
-            status = "⚠️ تطابق ناقص (اختلاف بيانات)"
+            status = "⚠️ Partial match (data mismatch)"
         elif nat_state == "❌":
-            # جنسية مختلفة = مشكلة حقيقية
-            status = "⚠️ تطابق ناقص (اختلاف بيانات)"
+            status = "⚠️ Partial match (data mismatch)"
         elif not name_ok:
-            # اسم مش متطابق = مشكلة
-            status = "⚠️ تطابق ناقص (اختلاف بيانات)"
+            status = "⚠️ Partial match (data mismatch)"
         elif not num_ok and matched_by_strong_key:
-            # ✅ الاسم/DOB متطابقين، بس الرقم مختلف في المصدر = تحذير خفيف
-            status = "🔢 رقم مختلف في المصدر"
+            status = "🔢 Shirt differs in source"
         else:
-            status = "✅ تطابق كامل"
+            status = "✅ Exact Match"
 
         rows.append({
-            "رقم السورس": src["number"],
-            "رقم Flashscore": fs["shirt"] if fs["shirt"] is not None else "—",
-            "تطابق الرقم": "✅" if num_ok else ("🔢" if matched_by_strong_key else "❌"),
-            "اسم السورس": src["name"],
-            "اسم Flashscore": fs["name"],
-            "تشابه الاسم %": score,
-            "ميلاد السورس": src["dob"] or "—",
-            "ميلاد Flashscore": fs["dob"] or "—",
-            "تطابق الميلاد": dob_state,
-            "جنسية السورس": src["nationality"] or "—",
-            "جنسية Flashscore": fs["nationality"] or "—",
-            "تطابق الجنسية": nat_state,
-            "ID داخلي": src["internal_id"],
-            "ID فلاش سكور": fs["fs_id"],
-            "طريقة المطابقة": method,
-            "الحالة": status,
+            "Gatekeeper Shirt": src["number"],
+            f"{source_label} Shirt": fs["shirt"] if fs["shirt"] is not None else "—",
+            "Shirt Match": "✅" if num_ok else ("🔢" if matched_by_strong_key else "❌"),
+            "Gatekeeper Name": src["name"],
+            "Online Source Name": fs["name"],
+            "Name Similarity %": score,
+            "Gatekeeper DOB": src["dob"] or "—",
+            "Online Source DOB": fs["dob"] or "—",
+            "DOB Match": dob_state,
+            "Gatekeeper Nationality": src["nationality"] or "—",
+            "Online Source Nationality": fs["nationality"] or "—",
+            "Nationality Match": nat_state,
+            "Internal ID": src["internal_id"],
+            f"{source_label} ID": fs["fs_id"],
+            "Match Method": method,
+            "Status": status,
         })
 
     blank = {k: "—" for k in (
-        "رقم السورس", "رقم Flashscore", "اسم السورس", "اسم Flashscore",
-        "ميلاد السورس", "ميلاد Flashscore", "جنسية السورس",
-        "جنسية Flashscore", "ID داخلي", "ID فلاش سكور",
+        "Gatekeeper Shirt", f"{source_label} Shirt", "Gatekeeper Name", "Online Source Name",
+        "Gatekeeper DOB", "Online Source DOB", "Gatekeeper Nationality",
+        "Online Source Nationality", "Internal ID", f"{source_label} ID",
     )}
 
     for src in only_source:
         rows.append({**blank,
-            "رقم السورس": src["number"],
-            "تطابق الرقم": "❌",
-            "اسم السورس": src["name"],
-            "اسم Flashscore": "— غير موجود —",
-            "تشابه الاسم %": 0,
-            "ميلاد السورس": src["dob"] or "—",
-            "تطابق الميلاد": "❌",
-            "جنسية السورس": src["nationality"] or "—",
-            "تطابق الجنسية": "❌",
-            "ID داخلي": src["internal_id"],
-            "طريقة المطابقة": "—",
-            "الحالة": "❌ عندك ومش عند Flashscore",
+            "Gatekeeper Shirt": src["number"],
+            "Shirt Match": "❌",
+            "Gatekeeper Name": src["name"],
+            "Online Source Name": "— Not Found —",
+            "Name Similarity %": 0,
+            "Gatekeeper DOB": src["dob"] or "—",
+            "DOB Match": "❌",
+            "Gatekeeper Nationality": src["nationality"] or "—",
+            "Nationality Match": "❌",
+            "Internal ID": src["internal_id"],
+            "Match Method": "—",
+            "Status": "❌ In Gatekeeper, not in source",
         })
 
     for fs in only_fs:
         rows.append({**blank,
-            "رقم Flashscore": fs["shirt"] if fs["shirt"] is not None else "—",
-            "تطابق الرقم": "❌",
-            "اسم السورس": "— غير موجود —",
-            "اسم Flashscore": fs["name"],
-            "تشابه الاسم %": 0,
-            "ميلاد Flashscore": fs["dob"] or "—",
-            "تطابق الميلاد": "❌",
-            "جنسية Flashscore": fs["nationality"] or "—",
-            "تطابق الجنسية": "❌",
-            "ID فلاش سكور": fs["fs_id"],
-            "طريقة المطابقة": "—",
-            "الحالة": "❌ عند Flashscore ومش عندك",
+            f"{source_label} Shirt": fs["shirt"] if fs["shirt"] is not None else "—",
+            "Shirt Match": "❌",
+            "Gatekeeper Name": "— Not Found —",
+            "Online Source Name": fs["name"],
+            "Name Similarity %": 0,
+            "Online Source DOB": fs["dob"] or "—",
+            "DOB Match": "❌",
+            "Online Source Nationality": fs["nationality"] or "—",
+            "Nationality Match": "❌",
+            f"{source_label} ID": fs["fs_id"],
+            "Match Method": "—",
+            "Status": "❌ In source, not in Gatekeeper",
         })
 
     return pd.DataFrame(rows)
@@ -936,49 +907,48 @@ def build_report(pairs, only_source, only_fs):
 # الواجهة
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="مطابقة التشكيلات", page_icon="⚽", layout="wide")
-st.title("⚽ مطابقة التشكيلات: السيستم الداخلي ضد Flashscore")
+st.set_page_config(page_title="Lineup Comparison", page_icon="⚽", layout="wide")
+st.title("⚽ Lineup Comparison against online sources")
 st.caption(
-    "المطابقة بتمشي على تاريخ الميلاد أولاً، بعدين الاسم المطبَّع، "
-    "وبعدين رقم القميص كآخر حل."
+    "Matching runs on Date of Birth first, then normalised name, "
+    "then shirt number as a last resort."
 )
 
-with st.expander("📋 طريقة الاستخدام", expanded=False):
+with st.expander("📋 How to use", expanded=False):
     st.markdown(
         """
-### مرة واحدة لكل جهاز
+### One-time setup per device
 
-ثبّت واحدة من دول (الأولى أحسن):
+Install one of the following (first option is recommended):
 
-- **إضافة Tampermonkey** + اليوزرسكريبت `transfermarkt-userscript.user.js`.
-  بعد كده بيظهر زرار أخضر على صفحة التشكيلة في ترانسفرماركت.
-- **بوكمارك** في شريط المفضلة — تعليماته في
-  `transfermarkt-bookmarklet.md`. مفيش إضافات، بس ممكن يتمنع
-  على بعض الصفحات.
+- **Tampermonkey extension** + the `transfermarkt-userscript.user.js` userscript.
+  A green button will appear on the Transfermarkt lineup page.
+- **Bookmarklet** in your browser favourites bar — instructions in
+  `transfermarkt-bookmarklet.md`. No extension required, but may be blocked
+  on some pages.
 
-### كل مرة
+### Every time
 
-1. افتح صفحة الماتش على ترانسفرماركت، تاب **LINE-UPS**.
-2. دوس الزرار الأخضر (أو البوكمارك) ← استنى ← **انسخ**.
-3. الصق هنا في الخانة اليمين.
-4. الصق جدول السيستم في الخانة الشمال.
-5. اختار فريقك (**HOME** صاحب الأرض / **AWAY** الضيف) — مهمة دي،
-   لأن أرقام القمصان بتتكرر بين الفريقين.
-6. دوس **ابدأ المقارنة**.
+1. Open the match page on Transfermarkt, **LINE-UPS** tab.
+2. Click the green button (or bookmarklet) → wait → **Copy**.
+3. Paste here into the right-hand box.
+4. Paste your Gatekeeper table into the left-hand box.
+5. Choose your team (**HOME** / **AWAY**) — important, as shirt numbers repeat across teams.
+6. Click **Start Comparison**.
 
-### ليه مش بضغطة واحدة من هنا؟
+### Why not one click from here?
 
-ترانسفرماركت بيحجب الطلبات الجاية من السيرفرات (AWS WAF)، فالأداة
-مش بتقدر تجيب الصفحة بنفسها. الاستخراج لازم يحصل من متصفحك، وعشان
-كده فيه خطوة النسخ واللصق.
+Transfermarkt blocks server-side requests (AWS WAF), so the tool cannot fetch
+the page itself. Extraction must happen in your browser, hence the copy-paste step.
 
-### إزاي المطابقة بتمشي
+### How matching works
 
-تاريخ الميلاد الأول (أقوى مفتاح)، بعدين الاسم بعد التطبيع
-(بيفهم الاختصارات وبيشيل التشكيل)، وبعدين رقم القميص كآخر حل.
-أي مطابقة بالرقم لوحده بتتعلّم ⚠️ لأنها مش موثوقة.
+Date of Birth first (strongest key), then normalised name
+(handles abbreviations, strips diacritics), then shirt number as a last resort.
+Any shirt-only match is flagged ⚠️ as unreliable.
 
-**ملحوظة:** 🔢 رقم مختلف في المصدر = اللاعب اتعرف بالاسم أو تاريخ الميلاد بس المصدر عنده رقم قميصه غلط. ده مش خطأ في هوية اللاعب.
+**Note:** 🔢 Shirt differs in source = the player was identified by name or DOB
+but the source has a wrong shirt number. This is not an identity error.
         """
     )
 
@@ -986,7 +956,7 @@ st.divider()
 
 _ws, _log_err = _sheet()
 email = st.text_input(
-    "📧 إيميلك (إجباري — كل مراجعة بتتسجل باسمك)",
+    "📧 Your email (required — every review is logged under your name)",
     value=st.session_state.get("reviewer_email", ""),
     placeholder="name@company.com",
 )
@@ -995,9 +965,9 @@ if email:
 
 if _ws is None and _log_err:
     st.warning(
-        f"⚠️ تسجيل جوجل شيت مش مفعّل: {_log_err}\n\n"
-        "المقارنة هتشتغل عادي بس مش هتتسجل. "
-        "التفاصيل في SETUP-GOOGLE-SHEET.md"
+        f"⚠️ Google Sheet logging not active: {_log_err}\n\n"
+        "Comparison will work normally but results won't be logged. "
+        "See SETUP-GOOGLE-SHEET.md for details."
     )
 elif _log_err:
     st.warning(_log_err)
@@ -1005,9 +975,9 @@ elif _log_err:
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("1. السيستم الداخلي")
+    st.subheader("1. Add Gatekeeper Lineup")
     internal_text = st.text_area(
-        "الصق الجدول:",
+        "Paste the table:",
         height=300,
         placeholder="30 1001243 Noah Kruth 2003-06-24 Germany\n"
                     "4 124245 Eldin Dzogovic 2003-06-08 Luxembourg\n"
@@ -1016,227 +986,152 @@ with col1:
     )
 
 with col2:
-    st.subheader("2. ترانسفرماركت")
+    st.subheader("2. Online Source")
 
-    fetch_mode = st.radio(
-        "طريقة الجلب:",
-        ["📋 لصق نص", "🔗 لينك الماتش (محجوب عادةً)"],
-        horizontal=True,
-        help="ترانسفرماركت بيحجب الطلبات الجاية من السيرفرات (AWS WAF)، "
-             "فطريقة اللينك بتفشل غالباً. استخدم الإضافة أو البوكمارك "
-             "في متصفحك وبعدين الصق النتيجة هنا.",
+    fs_text = st.text_area(
+        "Paste lineup:",
+        height=300,
+        placeholder="1\tMark Oxley\t1990-09-28\tEngland\tHOME\n"
+                    "24\tLewis Cass\t2000-02-27\tEngland\tHOME",
     )
-    use_url = fetch_mode.startswith("🔗")
-
-    tm_url, fs_text = "", ""
-
-    if use_url:
-        tm_url = st.text_input(
-            "لينك ماتش ترانسفرماركت:",
-            placeholder="https://www.transfermarkt.com/.../aufstellung/spielbericht/4940060",
-            help="أي لينك للماتش ينفع — الأداة بتحوّله لصفحة التشكيلة لوحدها.",
-        )
-        want_dob = st.checkbox(
-            "اجلب تواريخ الميلاد",
-            value=True,
-            help="بيفتح بروفايل كل لاعب. بيزود الوقت ~15 ثانية، "
-                 "وبيتكاش يوم كامل فالمرة التانية فورية.",
-        )
-        st.caption(
-            "لو رجع خطأ 403، يبقى ترانسفرماركت حجب IP السيرفر — "
-            "حوّل على 📋 لصق نص."
-        )
-    else:
-        fs_text = st.text_area(
-            "الصق التشكيلة:",
-            height=240,
-            placeholder="1\tMark Oxley\t1990-09-28\tEngland\tHOME\n"
-                        "24\tLewis Cass\t2000-02-27\tEngland\tHOME",
-        )
-        want_dob = False
+    use_url = False
+    want_dob = False
 
     side_choice = st.radio(
-        "الفريق اللي بتقارنه:",
+        "Team to compare:",
         ["HOME (صاحب الأرض)", "AWAY (الضيف)", "ANY (الكل)"],
         horizontal=True,
-        help="أرقام القمصان بتتكرر بين الفريقين، فاختار فريقك. "
-             "ANY تنفع بس لو النص فيه فريق واحد.",
+        help="Shirt numbers repeat across teams, so pick your team. "
+             "ANY works only if the pasted text contains a single team.",
     )
     ignore_extras = st.checkbox(
-        "اللاعبين الزيادة عند المصدر = الفريق التاني (متحسبهمش نواقص)",
+        "Extra players in source = other team (don't count as missing)",
         value=False,
-        help="علّم عليها بس لو لزقت الفريقين مع بعض بالماوس واخترت "
-             "ANY. لو فلترت بـ HOME أو AWAY، سيبها فاضية — غير كده "
-             "اللاعبين الناقصين مش هيظهروا.",
+        help="Check this only if you pasted both teams and chose ANY. "
+             "If you filtered by HOME or AWAY, leave it unchecked — "
+             "otherwise missing players won't show.",
     )
 
 st.divider()
 
-st.divider()
-
-_meta = parse_meta(fs_text) if (not use_url and fs_text) else {}
+_meta = parse_meta(fs_text) if fs_text else {}
 
 _auto_id = _meta.get("match_id", "")
 _auto_name = _meta.get("match_name", "")
 _auto_link = _meta.get("match_url", "")
 _auto_source = _meta.get("source", "transfermarkt")
 
-if use_url and tm_url.strip():
-    _mm = re.search(r"spielbericht/(\d+)", tm_match_url(tm_url))
-    _auto_id = _mm.group(1) if _mm else ""
-    _auto_link = tm_match_url(tm_url)
-    _slug = urlparse(_auto_link).path.lstrip("/").split("/")[0]
-    if "_" in _slug:
-        _h, _, _a = _slug.partition("_")
-        pretty = lambda s: " ".join(w.capitalize() for w in s.split("-") if w)
-        _auto_name = f"{pretty(_h)} vs {pretty(_a)}"
+_src_label = {
+    "transfermarkt": "Transfermarkt",
+    "sofascore": "SofaScore",
+    "zerozero": "ZeroZero",
+    "soccerway": "Soccerway",
+    "espn": "ESPN",
+    "tribuna": "Tribuna",
+    "ligafemenil": "Liga Femenil",
+    "flashscore": "Flashscore",
+}.get(_auto_source, _auto_source or "Source")
 
-st.subheader("🆔 بيانات الماتش")
+st.subheader("🆔 Match Details")
 st.caption(
-    "الشمال من سيستمك (بتكتبه)، واليمين من ترانسفرماركت "
-    "(بيتعبّى لوحده). الاتنين بيتسجلوا في الشيت."
+    "Left side from your system (you fill in), right side from the online source "
+    "(auto-filled from the pasted text). Both are logged to the sheet."
 )
 
 sc, tc = st.columns(2)
 
 with sc:
-    st.markdown("**من السيستم عندك**")
+    st.markdown("**From your Gatekeeper system**")
     src_match_id = st.text_input(
-        "Match ID (السيستم)",
-        placeholder="مثال: 1884213",
-        help="الـ ID اللي بتبحث بيه في الداتابيز بتاعتك.",
+        "Match ID (Gatekeeper)",
+        placeholder="e.g. 1884213",
+        help="The ID you use to look up the match in your database.",
     ).strip()
     src_match_name = st.text_input(
-        "اسم الماتش (السيستم)",
-        placeholder="مثال: Harrogate Town - Solihull Moors",
+        "Match Name (Gatekeeper)",
+        placeholder="e.g. Harrogate Town - Solihull Moors",
     ).strip()
 
 with tc:
-    _src_label = {
-        "transfermarkt": "ترانسفرماركت",
-        "sofascore": "سوفا سكور",
-        "zerozero": "زيرو زيرو",
-        "soccerway": "سوكرواي",
-        "espn": "ESPN",
-        "tribuna": "تريبونا",
-        "ligafemenil": "دوري السيدات المكسيكي",
-        "flashscore": "فلاش سكور",
-    }.get(_auto_source, _auto_source or "المصدر")
-
-    st.markdown(f"**من {_src_label}**")
+    st.markdown(f"**From {_src_label}**")
     match_id = st.text_input(
         f"Match ID ({_src_label})",
         value=_auto_id,
-        help="بيتعبّى لوحده من النص الملزوق.",
+        help="Auto-filled from the pasted text.",
     ).strip()
     match_name = st.text_input(
-        f"اسم الماتش ({_src_label})",
+        f"Match Name ({_src_label})",
         value=_auto_name,
         placeholder="Harrogate Town vs Solihull Moors",
     ).strip()
 
 if fs_text and not _auto_id:
     st.caption(
-        "ℹ️ النص الملزوق مفيهوش بيانات الماتش — يعني إما نسخته بالماوس، "
-        "أو نسخة اليوزرسكريبت عندك قديمة. اكتب البيانات يدوي أو حدّث "
-        "اليوزرسكريبت."
+        "ℹ️ The pasted text has no match metadata — either you copied it manually, "
+        "or your userscript version is outdated. Fill in the details manually or "
+        "update the userscript."
     )
 
 st.divider()
 
-if st.button("🚀 ابدأ المقارنة", type="primary", use_container_width=True):
+if st.button("🚀 Start Comparison", type="primary", use_container_width=True):
     email = (st.session_state.get("reviewer_email") or "").strip()
     if not email:
-        st.error("❌ لازم تحط إيميلك الأول — كل مراجعة بتتسجل باسم صاحبها.")
+        st.error("❌ Please enter your email first — every review is logged under your name.")
         st.stop()
     if not EMAIL_RE.match(email):
-        st.error(f"❌ الإيميل `{email}` شكله مش صح. اكتبه بالشكل name@company.com")
+        st.error(f"❌ Email `{email}` doesn't look right. Use the format name@company.com")
         st.stop()
     if not src_match_id:
-        st.error("❌ لازم Match ID من سيستمك — هو اللي يربط المراجعة بالماتش عندك.")
+        st.error("❌ Match ID from your system is required — it links the review to the match.")
         st.stop()
     if not src_match_name:
-        st.error("❌ لازم اسم الماتش من سيستمك.")
+        st.error("❌ Match name from your system is required.")
         st.stop()
     if not match_id:
         st.error(
-            f"❌ لازم Match ID من {_src_label}. لو النص مفيهوش، "
-            "خده من لينك الماتش."
+            f"❌ Match ID from {_src_label} is required. "
+            "If the pasted text doesn't include it, take it from the match URL."
         )
         st.stop()
 
     if not internal_text.strip():
-        st.warning("⚠️ الصق جدول السيستم الداخلي الأول.")
+        st.warning("⚠️ Please paste your Gatekeeper lineup first.")
         st.stop()
-    if use_url and not tm_url.strip():
-        st.warning("⚠️ حط لينك ماتش ترانسفرماركت.")
-        st.stop()
-    if not use_url and not fs_text.strip():
-        st.warning("⚠️ الصق التشكيلة في الخانة اليمين.")
+    if not fs_text.strip():
+        st.warning("⚠️ Please paste the lineup in the right-hand box.")
         st.stop()
 
     source_players = parse_internal(internal_text)
     if not source_players:
         st.error(
-            "❌ معرفتش أفكك نص السيستم. لازم كل سطر يكون: "
-            "رقم، ID، اسم، تاريخ ميلاد (YYYY-MM-DD)، جنسية."
+            "❌ Could not parse the Gatekeeper text. Each line must be: "
+            "shirt, ID, name, DOB (YYYY-MM-DD), nationality."
         )
         st.stop()
 
     want_side = side_choice.split()[0]
 
-    if use_url:
-        if not HAVE_BS4:
-            st.error(
-                "❌ مكتبة beautifulsoup4 ناقصة. ضيف `beautifulsoup4` "
-                "في requirements.txt واعمل redeploy."
-            )
-            st.stop()
-
-        bar = st.progress(0.0, "بجيب صفحة التشكيلة...")
-        fetched, msgs = tm_load(
-            tm_url, want_dob,
-            progress=lambda f, t: bar.progress(f, t),
-        )
-        bar.empty()
-
-        with st.expander("📡 تفاصيل الجلب", expanded=not fetched):
-            for m in msgs:
-                st.write(m)
-
-        if not fetched:
-            st.error(
-                "❌ الجلب فشل. شوف التفاصيل فوق. لو السبب 403، "
-                "حوّل على 📋 لصق نص."
-            )
-            st.stop()
-
-        fs_players = [
-            p for p in fetched
-            if want_side == "ANY" or p["side"] not in ("HOME", "AWAY")
-            or p["side"] == want_side
-        ]
-    else:
-        fs_players = parse_flashscore(fs_text, want_side)
+    fs_players = parse_flashscore(fs_text, want_side)
 
     match_link = _auto_link
     source_name = _auto_source
 
     if not fs_players:
         st.error(
-            "❌ مفيش لاعبين للمقارنة. لو فلترت بالفريق، جرّب ANY."
+            "❌ No players to compare. If you filtered by team, try ANY."
         )
         st.stop()
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("لاعبين السورس", len(source_players))
-    c2.metric("لاعبين Flashscore", len(fs_players))
-    c3.metric("بتاريخ ميلاد", sum(1 for p in fs_players if p["dob"]))
+    c1.metric("Gatekeeper Players", len(source_players))
+    c2.metric("Online Players", len(fs_players))
+    c3.metric("With DOB", sum(1 for p in fs_players if p["dob"]))
 
     if not any(p["dob"] for p in fs_players):
         st.info(
-            "ℹ️ مفيش تواريخ ميلاد في نص Flashscore، فالمطابقة هتمشي "
-            "بالأسماء والأرقام. عمود تطابق الميلاد هيبان ➖."
+            "ℹ️ No DOBs found in the pasted text — matching will run on names "
+            "and shirt numbers. The DOB Match column will show ➖."
         )
 
     pairs, only_src, only_fs = match_squads(source_players, fs_players)
@@ -1247,34 +1142,37 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
 
     if ignore_extras and filtered_by_side and has_side_info:
         st.info(
-            "ℹ️ تجاهلت خيار «الفريق التاني» لأنك فلترت بفريق والنص فيه "
-            "بيانات الفرق — فأي لاعب زيادة عند المصدر هو نقص حقيقي."
+            "ℹ️ Ignored the 'other team' option because you filtered by team and "
+            "the text contains team data — any extra player in the source is a real gap."
         )
 
-    df = build_report(pairs, only_src, [] if extras_are_other_team else only_fs)
+    # Determine source label for column headers
+    source_col_label = _src_label if _src_label else "Online Source"
 
-    full = sum(1 for r in df["الحالة"] if r.startswith("✅"))
-    wrong_num = sum(1 for r in df["الحالة"] if r.startswith("🔢"))
-    review = sum(1 for r in df["الحالة"] if r.startswith("⚠️"))
+    df = build_report(pairs, only_src, [] if extras_are_other_team else only_fs, source_label=source_col_label)
+
+    full = sum(1 for r in df["Status"] if r.startswith("✅"))
+    wrong_num = sum(1 for r in df["Status"] if r.startswith("🔢"))
+    review = sum(1 for r in df["Status"] if r.startswith("⚠️"))
     n_missing_src = len(only_src)
     n_missing_fs = 0 if extras_are_other_team else len(only_fs)
 
-    st.subheader("📊 النتيجة")
+    st.subheader("📊 Result")
 
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("✅ تطابق كامل", full)
-    k2.metric("🔢 رقم مختلف في المصدر", wrong_num,
-              help="اللاعب اتعرف بالاسم/DOB بس رقمه في المصدر غلط — مش خطأ في الهوية")
-    k3.metric("⚠️ محتاج مراجعة", review)
-    k4.metric("🚫 ناقص عند المصدر", n_missing_src,
-              help="لاعبين في سيستمك ومش لاقيلهم مقابل عند المصدر")
-    k5.metric("🚫 ناقص في سيستمك", n_missing_fs,
-              help="لاعبين عند المصدر ومش موجودين في جدولك")
+    k1.metric("✅ Exact Match", full)
+    k2.metric("🔢 Shirt Differs in Source", wrong_num,
+              help="Player identified by name/DOB but source has wrong shirt — not an identity error")
+    k3.metric("⚠️ Needs Review", review)
+    k4.metric("🚫 Missing at Source", n_missing_src,
+              help="Players in your Gatekeeper with no match in the source")
+    k5.metric("🚫 Missing in Gatekeeper", n_missing_fs,
+              help="Players in the source not found in your Gatekeeper")
 
     if n_missing_src or n_missing_fs:
         st.warning(
-            f"⚠️ فيه {n_missing_src + n_missing_fs} لاعب ملهم مقابل. "
-            "التفاصيل في قسم «اللاعبين الناقصين» تحت."
+            f"⚠️ {n_missing_src + n_missing_fs} player(s) have no match. "
+            "See the 'Missing Players' section below."
         )
 
     def color_status(val):
@@ -1282,75 +1180,74 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
         if "✅" in text:
             return "background-color: #1e4620; color: white;"
         if "🔢" in text:
-            # أزرق خفيف — مش error، بس للتنبيه
             return "background-color: #1a3a5c; color: #aad4f5;"
         if "⚠️" in text:
             return "background-color: #856404; color: white;"
         return "background-color: #721c24; color: white;"
 
     st.dataframe(
-        df.style.map(color_status, subset=["الحالة"]),
+        df.style.map(color_status, subset=["Status"]),
         use_container_width=True,
         hide_index=True,
     )
 
-    # --- اللاعبين الناقصين ---
+    # --- Missing Players ---
     st.divider()
-    st.subheader("🚫 اللاعبين الناقصين")
+    st.subheader("🚫 Missing Players")
 
     ms1, ms2 = st.columns(2)
 
     with ms1:
-        st.markdown(f"**ناقص عند المصدر ({n_missing_src})**")
-        st.caption("موجودين في سيستمك ومش لاقيلهم مقابل عند المصدر")
+        st.markdown(f"**Missing at Source ({n_missing_src})**")
+        st.caption("In your Gatekeeper but no match found in the source")
         if only_src:
             st.dataframe(
                 pd.DataFrame([{
-                    "رقم": p["number"],
-                    "الاسم": p["name"],
-                    "الميلاد": p["dob"] or "—",
-                    "الجنسية": p["nationality"] or "—",
-                    "ID داخلي": p["internal_id"],
-                    "النوع": p["type"],
+                    "Shirt": p["number"],
+                    "Name": p["name"],
+                    "DOB": p["dob"] or "—",
+                    "Nationality": p["nationality"] or "—",
+                    "Internal ID": p["internal_id"],
+                    "Type": p["type"],
                 } for p in only_src]),
                 use_container_width=True, hide_index=True,
             )
         else:
-            st.success("مفيش — كل لاعيبك لاقيناهم عند المصدر ✓")
+            st.success("All clear — every Gatekeeper player was found in the source ✓")
 
     with ms2:
-        st.markdown(f"**ناقص في سيستمك ({n_missing_fs})**")
-        st.caption("موجودين عند المصدر ومش موجودين في جدولك")
+        st.markdown(f"**Missing in Gatekeeper ({n_missing_fs})**")
+        st.caption("In the source but not found in your Gatekeeper")
         if only_fs and not extras_are_other_team:
             st.dataframe(
                 pd.DataFrame([{
-                    "رقم": p["shirt"] if p["shirt"] is not None else "—",
-                    "الاسم": p["name"],
-                    "الميلاد": p["dob"] or "—",
-                    "الجنسية": p["nationality"] or "—",
-                    "ID المصدر": p["fs_id"],
-                    "الفريق": p["side"],
+                    "Shirt": p["shirt"] if p["shirt"] is not None else "—",
+                    "Name": p["name"],
+                    "DOB": p["dob"] or "—",
+                    "Nationality": p["nationality"] or "—",
+                    "Source ID": p["fs_id"],
+                    "Team": p["side"],
                 } for p in only_fs]),
                 use_container_width=True, hide_index=True,
             )
         elif only_fs and extras_are_other_team:
             st.info(
-                f"{len(only_fs)} لاعب زيادة عند المصدر، بس انت علّمت إنهم "
-                "الفريق التاني فمحسبتهمش نواقص. القائمة في القسم المطوي تحت."
+                f"{len(only_fs)} extra player(s) in the source, treated as the other team. "
+                "See the collapsed section below."
             )
         else:
-            st.success("مفيش — كل لاعيبهم موجودين عندك ✓")
+            st.success("All clear — every source player is in your Gatekeeper ✓")
 
     st.divider()
 
     st.download_button(
-        "⬇️ تحميل CSV",
+        "⬇️ Download CSV",
         df.to_csv(index=False).encode("utf-8-sig"),
         "lineup_check.csv",
         "text/csv",
     )
 
-    # --- التسجيل في جوجل شيت ---
+    # --- Log to Google Sheet ---
     details = mismatch_details(df)
 
     ok_log, log_err = log_review([
@@ -1374,36 +1271,36 @@ if st.button("🚀 ابدأ المقارنة", type="primary", use_container_wid
 
     if ok_log:
         st.success(
-            f"📝 اتسجلت في جوجل شيت — {src_match_name} "
-            f"(سيستم {src_match_id} / ترانسفرماركت {match_id}) "
-            f"باسم {email}"
+            f"📝 Logged to Google Sheet — {src_match_name} "
+            f"(Gatekeeper {src_match_id} / {_src_label} {match_id}) "
+            f"by {email}"
         )
         if log_err:
             st.warning(log_err)
     else:
         st.error(
-            f"⚠️ النتيجة ظهرت بس **التسجيل فشل**: {log_err}\n\n"
-            "قول للمسؤول عن الأداة. لو التسجيل مطلوب للتوثيق، "
-            "احفظ الـ CSV كبديل."
+            f"⚠️ Results displayed but **logging failed**: {log_err}\n\n"
+            "Please notify the tool owner. If logging is required for audit, "
+            "save the CSV as a backup."
         )
         if BLOCK_ON_LOG_FAILURE:
             st.stop()
 
     if extras_are_other_team and only_fs:
         with st.expander(
-            f"👥 {len(only_fs)} لاعب زيادة عند المصدر (اعتبرتهم الفريق التاني)"
+            f"👥 {len(only_fs)} extra player(s) in source (treated as other team)"
         ):
             st.caption(
-                "راجع القائمة دي بسرعة: لو لقيت فيها لاعب المفروض يكون "
-                "في فريقك، يبقى فيه مشكلة حقيقية."
+                "Quickly scan this list: if you spot a player who should be in your team, "
+                "there may be a real issue."
             )
             st.dataframe(
                 pd.DataFrame([
                     {
-                        "رقم": p["shirt"] if p["shirt"] is not None else "—",
-                        "الاسم": p["name"],
-                        "الميلاد": p["dob"] or "—",
-                        "الفريق": p["side"],
+                        "Shirt": p["shirt"] if p["shirt"] is not None else "—",
+                        "Name": p["name"],
+                        "DOB": p["dob"] or "—",
+                        "Team": p["side"],
                     }
                     for p in only_fs
                 ]),
