@@ -661,6 +661,23 @@ SHEET_HEADER = [
     "Missing at Source", "Missing in Gatekeeper", "Diff Details", "Source",
 ]
 
+PLAYERS_HEADER = [
+    "Timestamp", "Email",
+    "Match ID (Gatekeeper)", "Match Name (Gatekeeper)",
+    "Match ID (Source)", "Match Name (Source)",
+    "Source", "Team",
+    # Gatekeeper side
+    "Internal ID", "Gatekeeper Shirt", "Gatekeeper Name",
+    "Gatekeeper DOB", "Gatekeeper Nationality",
+    # Online source side
+    "Source Player ID", "Online Source Shirt", "Online Source Name",
+    "Online Source DOB", "Online Source Nationality",
+    # Match quality
+    "Match Method", "Name Similarity %",
+    "Shirt Match", "DOB Match", "Nationality Match",
+    "Status",
+]
+
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
 
@@ -727,6 +744,111 @@ def log_review(row: list):
         return False, err
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
+        return True, err
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+@st.cache_resource(show_spinner=False)
+def _players_sheet():
+    """Return the 'players' tab worksheet (creates it if missing)."""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+    except ImportError:
+        return None, "gspread / google-auth libraries missing"
+
+    try:
+        if "gcp_service_account" not in st.secrets or "sheet_id" not in st.secrets:
+            return None, "Missing secrets (gcp_service_account or sheet_id)"
+
+        creds = Credentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]),
+            scopes=[
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive.file",
+            ],
+        )
+        client = gspread.authorize(creds)
+        book = client.open_by_key(st.secrets["sheet_id"])
+
+        # Tab name: configurable via secret, default "players"
+        tab_name = st.secrets.get("players_tab", "players")
+        try:
+            ws = book.worksheet(tab_name)
+        except Exception:
+            ws = book.add_worksheet(title=tab_name, rows=5000,
+                                    cols=len(PLAYERS_HEADER))
+
+        try:
+            first = ws.row_values(1)
+            if not first:
+                ws.update("A1", [PLAYERS_HEADER])
+            elif first != PLAYERS_HEADER:
+                return ws, (
+                    f"⚠️ Players tab headers are outdated ({len(first)} cols vs "
+                    f"{len(PLAYERS_HEADER)}). Consider resetting the tab header row."
+                )
+        except Exception:
+            pass
+
+        return ws, None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def log_players(df: pd.DataFrame, meta: dict):
+    """Append one row per player from the comparison DataFrame to the players tab."""
+    ws, err = _players_sheet()
+    if ws is None:
+        return False, err
+
+    ts          = meta["ts"]
+    email       = meta["email"]
+    gk_id       = meta["gk_id"]
+    gk_name     = meta["gk_name"]
+    src_id      = meta["src_id"]
+    src_name    = meta["src_name"]
+    source      = meta["source"]
+    team        = meta["team"]
+    src_label   = meta["src_label"]
+
+    rows = []
+    shirt_col   = f"{src_label} Shirt"
+    src_id_col  = f"{src_label} ID"
+
+    for _, r in df.iterrows():
+        rows.append([
+            ts, email,
+            gk_id, gk_name,
+            src_id, src_name,
+            source, team,
+            # Gatekeeper
+            str(r.get("Internal ID", "—")),
+            str(r.get("Gatekeeper Shirt", "—")),
+            str(r.get("Gatekeeper Name", "—")),
+            str(r.get("Gatekeeper DOB", "—")),
+            str(r.get("Gatekeeper Nationality", "—")),
+            # Online source — column names vary by source label
+            str(r.get(src_id_col, r.get("Online Source ID", "—"))),
+            str(r.get(shirt_col, r.get("Online Source Shirt", "—"))),
+            str(r.get("Online Source Name", "—")),
+            str(r.get("Online Source DOB", "—")),
+            str(r.get("Online Source Nationality", "—")),
+            # Match quality
+            str(r.get("Match Method", "—")),
+            str(r.get("Name Similarity %", "—")),
+            str(r.get("Shirt Match", "—")),
+            str(r.get("DOB Match", "—")),
+            str(r.get("Nationality Match", "—")),
+            str(r.get("Status", "—")),
+        ])
+
+    if not rows:
+        return True, None
+
+    try:
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
         return True, err
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
@@ -1269,14 +1391,33 @@ if st.button("🚀 Start Comparison", type="primary", use_container_width=True):
         source_name,
     ])
 
+    # --- Log player-level rows to the players tab ---
+    ok_players, players_err = log_players(df, {
+        "ts":        now_str(),
+        "email":     email,
+        "gk_id":     src_match_id,
+        "gk_name":   src_match_name,
+        "src_id":    match_id,
+        "src_name":  match_name or "—",
+        "source":    source_name,
+        "team":      want_side,
+        "src_label": source_col_label,
+    })
+
     if ok_log:
+        players_note = (
+            f" · {len(df)} player rows → '{st.secrets.get('players_tab', 'players')}' tab"
+            if ok_players else " · ⚠️ player rows not saved"
+        )
         st.success(
             f"📝 Logged to Google Sheet — {src_match_name} "
             f"(Gatekeeper {src_match_id} / {_src_label} {match_id}) "
-            f"by {email}"
+            f"by {email}{players_note}"
         )
         if log_err:
             st.warning(log_err)
+        if players_err and not ok_players:
+            st.warning(f"⚠️ Match log saved but player rows failed: {players_err}")
     else:
         st.error(
             f"⚠️ Results displayed but **logging failed**: {log_err}\n\n"
