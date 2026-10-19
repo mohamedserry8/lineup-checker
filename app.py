@@ -755,24 +755,6 @@ def _get_or_create_ws(tab_name: str, header: list):
     return ws, None
 
 
-def _ensure_capacity(ws, extra_rows: int = 500):
-    """
-    Resize the worksheet when fewer than `extra_rows` empty rows remain.
-    Uses a fresh API call for row_count so the number is always current.
-    """
-    try:
-        # Re-fetch sheet properties to get the real current row count
-        ws._spreadsheet.fetch_sheet_metadata()
-        current = ws.row_count
-        # get_all_values() fetches live data — no stale cache
-        last_used = len(ws.get_all_values())
-        free = current - last_used
-        if free < extra_rows:
-            new_size = current + max(extra_rows * 4, 2000)
-            ws.resize(rows=new_size)
-    except Exception:
-        pass  # best-effort; never block a log write
-
 
 def log_review(row: list):
     tab = st.secrets.get("sheet_tab", "log")
@@ -780,8 +762,13 @@ def log_review(row: list):
     if ws is None:
         return False, warn
     try:
-        _ensure_capacity(ws, extra_rows=200)
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        # Get real current row count from live API, then resize to guarantee space
+        all_vals = ws.get_all_values()
+        next_row = len(all_vals) + 1          # 1-indexed row to write into
+        current_rows = ws.row_count
+        if next_row >= current_rows:          # no room — expand first
+            ws.resize(rows=current_rows + 2000)
+        ws.insert_rows([row], row=next_row, value_input_option="USER_ENTERED")
         return True, warn
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
@@ -840,8 +827,13 @@ def log_players(df: pd.DataFrame, meta: dict):
         return True, None
 
     try:
-        _ensure_capacity(ws, extra_rows=len(rows) + 200)
-        ws.append_rows(rows, value_input_option="USER_ENTERED")
+        all_vals = ws.get_all_values()
+        next_row = len(all_vals) + 1
+        current_rows = ws.row_count
+        needed = next_row + len(rows)
+        if needed >= current_rows:
+            ws.resize(rows=needed + 2000)
+        ws.insert_rows(rows, row=next_row, value_input_option="USER_ENTERED")
         return True, err
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
