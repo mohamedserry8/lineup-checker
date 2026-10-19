@@ -689,6 +689,19 @@ def now_str() -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _ensure_capacity(ws, extra_rows: int = 500):
+    """Resize the worksheet if fewer than `extra_rows` empty rows remain."""
+    try:
+        current = ws.row_count
+        last_used = len(ws.get_all_values())          # actual data rows
+        free = current - last_used
+        if free < extra_rows:
+            new_size = current + max(extra_rows * 4, 2000)
+            ws.resize(rows=new_size)
+    except Exception:
+        pass   # best-effort; don't block logging if resize fails
+
+
 @st.cache_resource(show_spinner=False)
 def _sheet():
     try:
@@ -717,7 +730,7 @@ def _sheet():
         try:
             ws = book.worksheet(tab_name)
         except Exception:
-            ws = book.add_worksheet(title=tab_name, rows=2000,
+            ws = book.add_worksheet(title=tab_name, rows=10000,
                                     cols=len(SHEET_HEADER))
 
         try:
@@ -743,6 +756,7 @@ def log_review(row: list):
     if ws is None:
         return False, err
     try:
+        _ensure_capacity(ws, extra_rows=200)
         ws.append_row(row, value_input_option="USER_ENTERED")
         return True, err
     except Exception as exc:
@@ -777,7 +791,7 @@ def _players_sheet():
         try:
             ws = book.worksheet(tab_name)
         except Exception:
-            ws = book.add_worksheet(title=tab_name, rows=5000,
+            ws = book.add_worksheet(title=tab_name, rows=10000,
                                     cols=len(PLAYERS_HEADER))
 
         try:
@@ -848,6 +862,7 @@ def log_players(df: pd.DataFrame, meta: dict):
         return True, None
 
     try:
+        _ensure_capacity(ws, extra_rows=len(rows) + 200)
         ws.append_rows(rows, value_input_option="USER_ENTERED")
         return True, err
     except Exception as exc:
