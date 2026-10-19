@@ -689,132 +689,125 @@ def now_str() -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-@st.cache_resource(show_spinner=False)
-def _gspread_book():
-    """
-    Cache ONLY the authenticated gspread Book (spreadsheet handle).
-    Worksheet objects are intentionally NOT cached — we fetch a fresh
-    reference on every write so stale row-count metadata never blocks appends.
-    """
+
+def _make_gspread_client():
+    """Build a fresh authenticated gspread client — called on every write."""
     try:
         import gspread
         from google.oauth2.service_account import Credentials
     except ImportError:
         return None, "gspread / google-auth libraries missing in requirements.txt"
-
     try:
         if "gcp_service_account" not in st.secrets:
             return None, "No gcp_service_account in secrets settings"
         if "sheet_id" not in st.secrets:
             return None, "No sheet_id in secrets settings"
-
         creds = Credentials.from_service_account_info(
             dict(st.secrets["gcp_service_account"]),
-            scopes=[
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive.file",
-            ],
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         client = gspread.authorize(creds)
+        return client, None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+# Used only for the UI connectivity warning — not for writes.
+@st.cache_resource(show_spinner=False)
+def _gspread_book():
+    client, err = _make_gspread_client()
+    if client is None:
+        return None, err
+    try:
         book = client.open_by_key(st.secrets["sheet_id"])
         return book, None
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
 
 
-def _get_or_create_ws(tab_name: str, header: list):
+def _write_rows_to_tab(tab_name: str, header: list, rows: list):
     """
-    Always fetch a FRESH worksheet reference from the API.
-    Creates the tab (with a large initial size) if it doesn't exist yet,
-    and writes the header row if the tab is empty.
-    Returns (worksheet, warning_or_None).
+    Fresh client every call. Uses spreadsheet.values_append (raw Sheets API)
+    which always writes after the last data row, independent of row_count.
+    Resizes the sheet first if needed so the append never hits the grid limit.
     """
-    book, err = _gspread_book()
-    if book is None:
-        return None, err
+    client, err = _make_gspread_client()
+    if client is None:
+        return False, err
 
+    try:
+        book = client.open_by_key(st.secrets["sheet_id"])
+    except Exception as exc:
+        return False, f"open_by_key failed: {type(exc).__name__}: {exc}"
+
+    # Get or create worksheet
     try:
         ws = book.worksheet(tab_name)
     except Exception:
-        # Tab doesn't exist yet — create it with plenty of room
-        ws = book.add_worksheet(title=tab_name, rows=10000, cols=len(header))
+        try:
+            ws = book.add_worksheet(title=tab_name, rows=10000, cols=len(header))
+        except Exception as exc:
+            return False, f"add_worksheet failed: {type(exc).__name__}: {exc}"
 
+    # Write header if tab is empty
     try:
-        first = ws.row_values(1)
-        if not first:
+        if not ws.row_values(1):
             ws.update("A1", [header])
-        elif first != header:
-            return ws, (
-                f"⚠️ Tab '{tab_name}' headers are outdated "
-                f"({len(first)} cols vs {len(header)}). "
-                "Logging is active but columns may be misaligned."
-            )
     except Exception:
         pass
 
-    return ws, None
+    # Resize proactively so the grid never blocks the append
+    try:
+        used_rows = len(ws.col_values(1))   # fast: only reads column A
+        needed    = used_rows + len(rows) + 1000
+        if needed > ws.row_count:
+            ws.resize(rows=needed)
+    except Exception:
+        pass  # best-effort; the values_append call might still succeed
 
+    # values_append = raw POST to sheets.spreadsheets.values.append
+    # It always finds the first empty row after existing data regardless of
+    # the declared grid size — no insert/shift, no row-index arithmetic.
+    try:
+        book.values_append(
+            f"{tab_name}!A1",
+            {"valueInputOption": "USER_ENTERED", "insertDataOption": "INSERT_ROWS"},
+            {"values": rows},
+        )
+        return True, None
+    except Exception as exc:
+        return False, f"values_append failed: {type(exc).__name__}: {exc}"
 
 
 def log_review(row: list):
     tab = st.secrets.get("sheet_tab", "log")
-    ws, warn = _get_or_create_ws(tab, SHEET_HEADER)
-    if ws is None:
-        return False, warn
-    try:
-        # Get real current row count from live API, then resize to guarantee space
-        all_vals = ws.get_all_values()
-        next_row = len(all_vals) + 1          # 1-indexed row to write into
-        current_rows = ws.row_count
-        if next_row >= current_rows:          # no room — expand first
-            ws.resize(rows=current_rows + 2000)
-        ws.insert_rows([row], row=next_row, value_input_option="USER_ENTERED")
-        return True, warn
-    except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"
+    return _write_rows_to_tab(tab, SHEET_HEADER, [row])
 
 
 def log_players(df: pd.DataFrame, meta: dict):
     """Append one row per player from the comparison DataFrame to the players tab."""
-    tab = st.secrets.get("players_tab", "players")
-    ws, warn = _get_or_create_ws(tab, PLAYERS_HEADER)
-    if ws is None:
-        return False, warn
-    err = warn
-
-    ts          = meta["ts"]
-    email       = meta["email"]
-    gk_id       = meta["gk_id"]
-    gk_name     = meta["gk_name"]
-    src_id      = meta["src_id"]
-    src_name    = meta["src_name"]
-    source      = meta["source"]
-    team        = meta["team"]
-    src_label   = meta["src_label"]
+    tab       = st.secrets.get("players_tab", "players")
+    src_label = meta["src_label"]
+    shirt_col = f"{src_label} Shirt"
+    src_id_col = f"{src_label} ID"
 
     rows = []
-    shirt_col   = f"{src_label} Shirt"
-    src_id_col  = f"{src_label} ID"
-
     for _, r in df.iterrows():
         rows.append([
-            ts, email,
-            gk_id, gk_name,
-            src_id, src_name,
-            source, team,
-            # Gatekeeper
+            meta["ts"], meta["email"],
+            meta["gk_id"], meta["gk_name"],
+            meta["src_id"], meta["src_name"],
+            meta["source"], meta["team"],
             str(r.get("Internal ID", "—")),
             str(r.get("Gatekeeper Shirt", "—")),
             str(r.get("Gatekeeper Name", "—")),
             str(r.get("Gatekeeper DOB", "—")),
             str(r.get("Gatekeeper Nationality", "—")),
-            # Online source — column names vary by source label
             str(r.get(src_id_col, r.get("Online Source ID", "—"))),
             str(r.get(shirt_col, r.get("Online Source Shirt", "—"))),
             str(r.get("Online Source Name", "—")),
             str(r.get("Online Source DOB", "—")),
             str(r.get("Online Source Nationality", "—")),
-            # Match quality
             str(r.get("Match Method", "—")),
             str(r.get("Name Similarity %", "—")),
             str(r.get("Shirt Match", "—")),
@@ -825,18 +818,8 @@ def log_players(df: pd.DataFrame, meta: dict):
 
     if not rows:
         return True, None
+    return _write_rows_to_tab(tab, PLAYERS_HEADER, rows)
 
-    try:
-        all_vals = ws.get_all_values()
-        next_row = len(all_vals) + 1
-        current_rows = ws.row_count
-        needed = next_row + len(rows)
-        if needed >= current_rows:
-            ws.resize(rows=needed + 2000)
-        ws.insert_rows(rows, row=next_row, value_input_option="USER_ENTERED")
-        return True, err
-    except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"
 
 
 def mismatch_details(df: pd.DataFrame) -> str:
