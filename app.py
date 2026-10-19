@@ -1003,6 +1003,26 @@ def build_report(pairs, only_source, only_fs, source_label="Online Source"):
 
 st.set_page_config(page_title="Lineup Comparison", page_icon="⚽", layout="wide")
 st.title("⚽ Lineup Comparison against online sources")
+
+# ── STARTUP DIAGNOSTIC ──────────────────────────────────────────────────────
+# Runs once on every page load. Writes one row to a "diagnostic" tab.
+# Check that tab in the sheet: if rows appear → credentials+API are fine,
+# bug is in the logging code path. If nothing appears → credentials/API issue.
+if "diag_done" not in st.session_state:
+    st.session_state["diag_done"] = True
+    try:
+        _ok, _err = _write_rows_to_tab(
+            "diagnostic",
+            ["Time", "Status", "Detail"],
+            [[now_str(), "startup_ping", "app loaded ok"]],
+        )
+        if _ok:
+            st.sidebar.success("✅ Sheet write: OK")
+        else:
+            st.sidebar.error(f"❌ Sheet write FAILED: {_err}")
+    except Exception as _exc:
+        st.sidebar.error(f"❌ Sheet write EXCEPTION: {_exc}")
+# ────────────────────────────────────────────────────────────────────────────
 st.caption(
     "Matching runs on Date of Birth first, then normalised name, "
     "then shirt number as a last resort."
