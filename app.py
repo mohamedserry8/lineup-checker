@@ -787,10 +787,6 @@ def log_review(row: list):
 def log_players(df: pd.DataFrame, meta: dict):
     """Append one row per player from the comparison DataFrame to the players tab."""
     tab       = st.secrets.get("players_tab", "players")
-    src_label = meta["src_label"]
-    shirt_col = f"{src_label} Shirt"
-    src_id_col = f"{src_label} ID"
-
     rows = []
     for _, r in df.iterrows():
         rows.append([
@@ -803,8 +799,8 @@ def log_players(df: pd.DataFrame, meta: dict):
             str(r.get("Gatekeeper Name", "—")),
             str(r.get("Gatekeeper DOB", "—")),
             str(r.get("Gatekeeper Nationality", "—")),
-            str(r.get(src_id_col, r.get("Online Source ID", "—"))),
-            str(r.get(shirt_col, r.get("Online Source Shirt", "—"))),
+            str(r.get("Online Source ID", "—")),
+            str(r.get("Online Source Shirt", "—")),
             str(r.get("Online Source Name", "—")),
             str(r.get("Online Source DOB", "—")),
             str(r.get("Online Source Nationality", "—")),
@@ -904,6 +900,10 @@ def match_squads(source, flashscore):
 
 
 def build_report(pairs, only_source, only_fs, source_label="Online Source"):
+    # NOTE: all internal column names are FIXED (never include source_label).
+    # source_label is stored in its own column for display purposes only.
+    # This keeps mismatch_details, log_players, and color_status stable
+    # regardless of which source is being compared.
     rows = []
 
     for src, fs, method, _conf in pairs:
@@ -934,60 +934,64 @@ def build_report(pairs, only_source, only_fs, source_label="Online Source"):
             status = "✅ Exact Match"
 
         rows.append({
-            "Gatekeeper Shirt": src["number"],
-            f"{source_label} Shirt": fs["shirt"] if fs["shirt"] is not None else "—",
-            "Shirt Match": "✅" if num_ok else ("🔢" if matched_by_strong_key else "❌"),
-            "Gatekeeper Name": src["name"],
-            "Online Source Name": fs["name"],
-            "Name Similarity %": score,
-            "Gatekeeper DOB": src["dob"] or "—",
-            "Online Source DOB": fs["dob"] or "—",
-            "DOB Match": dob_state,
-            "Gatekeeper Nationality": src["nationality"] or "—",
+            "Gatekeeper Shirt":        src["number"],
+            "Online Source Shirt":     fs["shirt"] if fs["shirt"] is not None else "—",
+            "Shirt Match":             "✅" if num_ok else ("🔢" if matched_by_strong_key else "❌"),
+            "Gatekeeper Name":         src["name"],
+            "Online Source Name":      fs["name"],
+            "Name Similarity %":       score,
+            "Gatekeeper DOB":          src["dob"] or "—",
+            "Online Source DOB":       fs["dob"] or "—",
+            "DOB Match":               dob_state,
+            "Gatekeeper Nationality":  src["nationality"] or "—",
             "Online Source Nationality": fs["nationality"] or "—",
-            "Nationality Match": nat_state,
-            "Internal ID": src["internal_id"],
-            f"{source_label} ID": fs["fs_id"],
-            "Match Method": method,
-            "Status": status,
+            "Nationality Match":       nat_state,
+            "Internal ID":             src["internal_id"],
+            "Online Source ID":        fs["fs_id"],
+            "Source":                  source_label,
+            "Match Method":            method,
+            "Status":                  status,
         })
 
     blank = {k: "—" for k in (
-        "Gatekeeper Shirt", f"{source_label} Shirt", "Gatekeeper Name", "Online Source Name",
+        "Gatekeeper Shirt", "Online Source Shirt", "Gatekeeper Name", "Online Source Name",
         "Gatekeeper DOB", "Online Source DOB", "Gatekeeper Nationality",
-        "Online Source Nationality", "Internal ID", f"{source_label} ID",
+        "Online Source Nationality", "Internal ID", "Online Source ID",
     )}
 
     for src in only_source:
         rows.append({**blank,
-            "Gatekeeper Shirt": src["number"],
-            "Shirt Match": "❌",
-            "Gatekeeper Name": src["name"],
-            "Online Source Name": "— Not Found —",
-            "Name Similarity %": 0,
-            "Gatekeeper DOB": src["dob"] or "—",
-            "DOB Match": "❌",
+            "Gatekeeper Shirt":       src["number"],
+            "Shirt Match":            "❌",
+            "Gatekeeper Name":        src["name"],
+            "Online Source Name":     "— Not Found —",
+            "Name Similarity %":      0,
+            "Gatekeeper DOB":         src["dob"] or "—",
+            "DOB Match":              "❌",
             "Gatekeeper Nationality": src["nationality"] or "—",
-            "Nationality Match": "❌",
-            "Internal ID": src["internal_id"],
-            "Match Method": "—",
-            "Status": "❌ In Gatekeeper, not in source",
+            "Nationality Match":      "❌",
+            "Internal ID":            src["internal_id"],
+            "Online Source ID":       "—",
+            "Source":                 source_label,
+            "Match Method":           "—",
+            "Status":                 "❌ In Gatekeeper, not in source",
         })
 
     for fs in only_fs:
         rows.append({**blank,
-            f"{source_label} Shirt": fs["shirt"] if fs["shirt"] is not None else "—",
-            "Shirt Match": "❌",
-            "Gatekeeper Name": "— Not Found —",
-            "Online Source Name": fs["name"],
-            "Name Similarity %": 0,
-            "Online Source DOB": fs["dob"] or "—",
-            "DOB Match": "❌",
+            "Online Source Shirt":      fs["shirt"] if fs["shirt"] is not None else "—",
+            "Shirt Match":              "❌",
+            "Gatekeeper Name":          "— Not Found —",
+            "Online Source Name":       fs["name"],
+            "Name Similarity %":        0,
+            "Online Source DOB":        fs["dob"] or "—",
+            "DOB Match":                "❌",
             "Online Source Nationality": fs["nationality"] or "—",
-            "Nationality Match": "❌",
-            f"{source_label} ID": fs["fs_id"],
-            "Match Method": "—",
-            "Status": "❌ In source, not in Gatekeeper",
+            "Nationality Match":        "❌",
+            "Online Source ID":         fs["fs_id"],
+            "Source":                   source_label,
+            "Match Method":             "—",
+            "Status":                   "❌ In source, not in Gatekeeper",
         })
 
     return pd.DataFrame(rows)
@@ -1273,8 +1277,17 @@ if st.button("🚀 Start Comparison", type="primary", use_container_width=True):
             return "background-color: #856404; color: white;"
         return "background-color: #721c24; color: white;"
 
+    # Rename columns for display only — internal names stay fixed for logging
+    display_df = df.rename(columns={
+        "Online Source Shirt": f"{source_col_label} Shirt",
+        "Online Source Name":  f"{source_col_label} Name",
+        "Online Source DOB":   f"{source_col_label} DOB",
+        "Online Source Nationality": f"{source_col_label} Nationality",
+        "Online Source ID":    f"{source_col_label} ID",
+    }).drop(columns=["Source"], errors="ignore")
+
     st.dataframe(
-        df.style.map(color_status, subset=["Status"]),
+        display_df.style.map(color_status, subset=["Status"]),
         use_container_width=True,
         hide_index=True,
     )
