@@ -689,21 +689,13 @@ def now_str() -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _ensure_capacity(ws, extra_rows: int = 500):
-    """Resize the worksheet if fewer than `extra_rows` empty rows remain."""
-    try:
-        current = ws.row_count
-        last_used = len(ws.get_all_values())          # actual data rows
-        free = current - last_used
-        if free < extra_rows:
-            new_size = current + max(extra_rows * 4, 2000)
-            ws.resize(rows=new_size)
-    except Exception:
-        pass   # best-effort; don't block logging if resize fails
-
-
 @st.cache_resource(show_spinner=False)
-def _sheet():
+def _gspread_book():
+    """
+    Cache ONLY the authenticated gspread Book (spreadsheet handle).
+    Worksheet objects are intentionally NOT cached — we fetch a fresh
+    reference on every write so stale row-count metadata never blocks appends.
+    """
     try:
         import gspread
         from google.oauth2.service_account import Credentials
@@ -725,97 +717,83 @@ def _sheet():
         )
         client = gspread.authorize(creds)
         book = client.open_by_key(st.secrets["sheet_id"])
-
-        tab_name = st.secrets.get("sheet_tab", "log")
-        try:
-            ws = book.worksheet(tab_name)
-        except Exception:
-            ws = book.add_worksheet(title=tab_name, rows=10000,
-                                    cols=len(SHEET_HEADER))
-
-        try:
-            first = ws.row_values(1)
-            if not first:
-                ws.update("A1", [SHEET_HEADER])
-            elif first != SHEET_HEADER:
-                return ws, (
-                    f"⚠️ Sheet headers are outdated ({len(first)} columns instead of "
-                    f"{len(SHEET_HEADER)}). Logging is active but columns may be misaligned. "
-                    "Fix the first row in the sheet or create a new empty tab."
-                )
-        except Exception:
-            pass
-
-        return ws, None
+        return book, None
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
 
 
+def _get_or_create_ws(tab_name: str, header: list):
+    """
+    Always fetch a FRESH worksheet reference from the API.
+    Creates the tab (with a large initial size) if it doesn't exist yet,
+    and writes the header row if the tab is empty.
+    Returns (worksheet, warning_or_None).
+    """
+    book, err = _gspread_book()
+    if book is None:
+        return None, err
+
+    try:
+        ws = book.worksheet(tab_name)
+    except Exception:
+        # Tab doesn't exist yet — create it with plenty of room
+        ws = book.add_worksheet(title=tab_name, rows=10000, cols=len(header))
+
+    try:
+        first = ws.row_values(1)
+        if not first:
+            ws.update("A1", [header])
+        elif first != header:
+            return ws, (
+                f"⚠️ Tab '{tab_name}' headers are outdated "
+                f"({len(first)} cols vs {len(header)}). "
+                "Logging is active but columns may be misaligned."
+            )
+    except Exception:
+        pass
+
+    return ws, None
+
+
+def _ensure_capacity(ws, extra_rows: int = 500):
+    """
+    Resize the worksheet when fewer than `extra_rows` empty rows remain.
+    Uses a fresh API call for row_count so the number is always current.
+    """
+    try:
+        # Re-fetch sheet properties to get the real current row count
+        ws._spreadsheet.fetch_sheet_metadata()
+        current = ws.row_count
+        # get_all_values() fetches live data — no stale cache
+        last_used = len(ws.get_all_values())
+        free = current - last_used
+        if free < extra_rows:
+            new_size = current + max(extra_rows * 4, 2000)
+            ws.resize(rows=new_size)
+    except Exception:
+        pass  # best-effort; never block a log write
+
+
 def log_review(row: list):
-    ws, err = _sheet()
+    tab = st.secrets.get("sheet_tab", "log")
+    ws, warn = _get_or_create_ws(tab, SHEET_HEADER)
     if ws is None:
-        return False, err
+        return False, warn
     try:
         _ensure_capacity(ws, extra_rows=200)
         ws.append_row(row, value_input_option="USER_ENTERED")
-        return True, err
+        return True, warn
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
 
 
-@st.cache_resource(show_spinner=False)
-def _players_sheet():
-    """Return the 'players' tab worksheet (creates it if missing)."""
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-    except ImportError:
-        return None, "gspread / google-auth libraries missing"
-
-    try:
-        if "gcp_service_account" not in st.secrets or "sheet_id" not in st.secrets:
-            return None, "Missing secrets (gcp_service_account or sheet_id)"
-
-        creds = Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]),
-            scopes=[
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive.file",
-            ],
-        )
-        client = gspread.authorize(creds)
-        book = client.open_by_key(st.secrets["sheet_id"])
-
-        # Tab name: configurable via secret, default "players"
-        tab_name = st.secrets.get("players_tab", "players")
-        try:
-            ws = book.worksheet(tab_name)
-        except Exception:
-            ws = book.add_worksheet(title=tab_name, rows=10000,
-                                    cols=len(PLAYERS_HEADER))
-
-        try:
-            first = ws.row_values(1)
-            if not first:
-                ws.update("A1", [PLAYERS_HEADER])
-            elif first != PLAYERS_HEADER:
-                return ws, (
-                    f"⚠️ Players tab headers are outdated ({len(first)} cols vs "
-                    f"{len(PLAYERS_HEADER)}). Consider resetting the tab header row."
-                )
-        except Exception:
-            pass
-
-        return ws, None
-    except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-
-
 def log_players(df: pd.DataFrame, meta: dict):
     """Append one row per player from the comparison DataFrame to the players tab."""
-    ws, err = _players_sheet()
+    tab = st.secrets.get("players_tab", "players")
+    ws, warn = _get_or_create_ws(tab, PLAYERS_HEADER)
     if ws is None:
-        return False, err
+        return False, warn
+    err = warn
 
     ts          = meta["ts"]
     email       = meta["email"]
@@ -1091,7 +1069,7 @@ but the source has a wrong shirt number. This is not an identity error.
 
 st.divider()
 
-_ws, _log_err = _sheet()
+_book, _log_err = _gspread_book()
 email = st.text_input(
     "📧 Your email (required — every review is logged under your name)",
     value=st.session_state.get("reviewer_email", ""),
@@ -1100,14 +1078,12 @@ email = st.text_input(
 if email:
     st.session_state["reviewer_email"] = email.strip()
 
-if _ws is None and _log_err:
+if _book is None and _log_err:
     st.warning(
         f"⚠️ Google Sheet logging not active: {_log_err}\n\n"
         "Comparison will work normally but results won't be logged. "
         "See SETUP-GOOGLE-SHEET.md for details."
     )
-elif _log_err:
-    st.warning(_log_err)
 
 col1, col2 = st.columns(2)
 
